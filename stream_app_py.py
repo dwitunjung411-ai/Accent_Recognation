@@ -116,6 +116,10 @@ else:
     
     # Bangun model 
     def build_embedding_model(input_shape):
+
+
+
+        
     model = tf.keras.Sequential([
         tf.keras.layers.Conv2D(128, (3, 3), activation='relu'),
         tf.keras.layers.MaxPooling2D((2, 2)),
