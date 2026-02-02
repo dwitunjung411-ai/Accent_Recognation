@@ -45,21 +45,53 @@ MAX_K_SHOT = 5
 # =========================================================
 mel_spec_size = (128, 64, 1)
 
-def build_embedding_model(input_shape):
-    """
-    Mengikuti versi yang digunakan di notebook (lebih ringkas):
-    Conv2D(128) -> MaxPool -> GAP -> Dense(256) -> Dropout -> Dense(128)
-    """
+import tensorflow as tf
+import numpy as np
+import os
+
+def create_and_save_dummy_model():
+    """Membuat model dummy untuk testing"""
+    
+    # Input shape untuk audio MFCC
+    # Sesuaikan dengan preprocessing Anda
+    input_shape = (40, 100, 1)  # MFCC 40 coefficients, 100 frames
+    
+    # Bangun model sesuai skripsi
     model = tf.keras.Sequential([
-        layers.Input(shape=input_shape),
-        layers.Conv2D(128, (3, 3), activation="relu"),
-        layers.MaxPooling2D((2, 2)),
-        layers.GlobalAveragePooling2D(),
-        layers.Dense(256, activation="relu"),
-        layers.Dropout(0.3),
-        layers.Dense(128, activation="relu"),
+        tf.keras.layers.Conv2D(32, (3, 3), activation='relu', 
+                               input_shape=input_shape),
+        tf.keras.layers.MaxPooling2D((2, 2)),
+        tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D((2, 2)),
+        tf.keras.layers.Conv2D(128, (3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D((2, 2)),
+        tf.keras.layers.GlobalAveragePooling2D(),
+        tf.keras.layers.Dense(256, activation='relu'),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.Dense(128, activation='relu')
     ])
+    
+    # Compile dengan optimizer dummy
+    model.compile(optimizer='adam', loss='mse')
+    
+    # Buat data dummy untuk "training" sekali
+    dummy_input = np.random.randn(1, *input_shape)
+    dummy_output = np.random.randn(1, 128)
+    
+    # Train 1 epoch dengan data dummy
+    model.fit(dummy_input, dummy_output, epochs=1, verbose=0)
+    
+    # Simpan model
+    model.save('embedding_model.keras')
+    
+    print("✅ Dummy model created and saved as 'embedding_model.keras'")
+    print(f"📊 Input shape: {input_shape}")
+    print(f"📈 Output shape: (batch_size, 128)")
+    
     return model
+
+if __name__ == "__main__":
+    create_and_save_dummy_model()
 
 @st.cache_resource
 def load_preprocess():
