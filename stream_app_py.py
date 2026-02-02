@@ -45,14 +45,6 @@ MAX_K_SHOT = 5
 # =========================================================
 mel_spec_size = (128, 64, 1)
 
-import tensorflow as tf
-import numpy as np
-import os
-
-import streamlit as st
-import joblib
-import os
-
 # ==================== AUTO-LOAD DAN GUNAKAN PREPROCESSOR ====================
 def initialize_preprocessor():
     """Inisialisasi dan gunakan preprocessor jika ada"""
@@ -116,10 +108,6 @@ else:
     
     # Bangun model 
     def build_embedding_model(input_shape):
-
-
-
-        
     model = tf.keras.Sequential([
         tf.keras.layers.Conv2D(128, (3, 3), activation='relu'),
         tf.keras.layers.MaxPooling2D((2, 2)),
