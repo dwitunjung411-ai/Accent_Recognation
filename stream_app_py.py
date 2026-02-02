@@ -36,21 +36,21 @@ MAX_K_SHOT = 5
 # =========================================================
 mel_spec_size = (128, 64, 1)
 
-def build_embedding_model(input_shape):
-    """
-    Mengikuti versi yang digunakan di notebook (lebih ringkas):
-    Conv2D(128) -> MaxPool -> GAP -> Dense(256) -> Dropout -> Dense(128)
-    """
-    model = tf.keras.Sequential([
-        layers.Input(shape=input_shape),
-        layers.Conv2D(128, (3, 3), activation="relu"),
-        layers.MaxPooling2D((2, 2)),
-        layers.GlobalAveragePooling2D(),
-        layers.Dense(256, activation="relu"),
-        layers.Dropout(0.3),
-        layers.Dense(128, activation="relu"),
+def create_embedding_model(input_shape=(128, 128, 1)):
+    model = keras.Sequential([
+        keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=input_shape),
+        keras.layers.MaxPooling2D((2, 2)),
+        keras.layers.Conv2D(64, (3, 3), activation='relu'),
+        keras.layers.MaxPooling2D((2, 2)),
+        keras.layers.Flatten(),
+        keras.layers.Dense(128, activation='relu'),
+        keras.layers.Dense(64, activation='relu')  # Embedding layer
     ])
     return model
+
+# Buat dan simpan model
+embedding_model = create_embedding_model()
+embedding_model.save('embedding_model.keras')
 
 @st.cache_resource
 def load_preprocess():
