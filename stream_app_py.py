@@ -49,14 +49,73 @@ import tensorflow as tf
 import numpy as np
 import os
 
-def create_and_save_dummy_model():
-    """Membuat model dummy untuk testing"""
+import streamlit as st
+import joblib
+import os
+
+# ==================== AUTO-LOAD DAN GUNAKAN PREPROCESSOR ====================
+def initialize_preprocessor():
+    """Inisialisasi dan gunakan preprocessor jika ada"""
+    
+    # Cek apakah file preprocess.joblib ada
+    if os.path.exists('preprocess.joblib'):
+        try:
+            # Load preprocessor
+            preprocessor = joblib.load('preprocess.joblib')
+            
+            # Tampilkan status di UI
+            st.sidebar.success("✅ preprocess.joblib DITEMUKAN dan DIGUNAKAN")
+            
+            # Debug info (opsional)
+            with st.sidebar.expander("🔍 Info Preprocessor"):
+                st.write(f"**Tipe:** {type(preprocessor).__name__}")
+                if hasattr(preprocessor, '__class__'):
+                    st.write(f"**Kelas:** {preprocessor.__class__.__name__}")
+            
+            return preprocessor
+            
+        except Exception as e:
+            st.sidebar.warning(f"⚠️ preprocess.joblib ada tapi error: {str(e)}")
+            return None
+    else:
+        st.sidebar.info("ℹ️ preprocess.joblib tidak ditemukan (opsional)")
+        return None
+
+# ==================== MODIFIKASI FUNGSI PREPROCESSING ====================
+def extract_features_with_preprocessor(audio_data, preprocessor=None):
+    """Ekstrak fitur dengan atau tanpa preprocessor"""
+    
+    # ... (kode ekstraksi fitur MFCC Anda) ...
+    
+    if preprocessor is not None:
+        # Gunakan preprocessor di sini
+        try:
+            # Transform data dengan preprocessor
+            processed_data = preprocessor.transform(your_features_here)
+            return processed_data
+        except Exception as e:
+            st.warning(f"Preprocessor error, menggunakan raw features: {e}")
+            return your_features_here
+    else:
+        # Tanpa preprocessor
+        return your_features_here
+
+# ==================== INTEGRASI DI MAIN APP ====================
+# Panggil fungsi inisialisasi
+preprocessor = initialize_preprocessor()
+
+# Pastikan preprocessor digunakan dalam pipeline
+if preprocessor:
+    st.info("📊 **Preprocessor aktif:** Fitur akan dinormalisasi menggunakan preprocess.joblib")
+else:
+    st.info("📊 **Preprocessor tidak aktif:** Menggunakan fitur mentah")
     
     # Input shape untuk audio MFCC
     # Sesuaikan dengan preprocessing Anda
     input_shape = (40, 100, 1)  # MFCC 40 coefficients, 100 frames
     
-    # Bangun model sesuai skripsi
+    # Bangun model 
+    def build_embedding_model(input_shape):
     model = tf.keras.Sequential([
         tf.keras.layers.Conv2D(128, (3, 3), activation='relu'),
         tf.keras.layers.MaxPooling2D((2, 2)),
