@@ -228,7 +228,7 @@ def prototypical_predict(embedding_model, support_x, support_y, query_x, class_n
 # =========================================================
 # UI
 # =========================================================
-st.title("🎙️ Accent Recognition (Few-Shot Learning — Prototypical Network)")
+st.title("🎙️ Accent Recognition (Few-Shot Learning)")
 st.caption("Sesuai pipeline notebook: MFCC+delta+delta2, metadata broadcast, embedding CNN, prototype mean + Euclidean distance.")
 
 preprocess = None
