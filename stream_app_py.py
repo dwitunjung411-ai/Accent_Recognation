@@ -22,7 +22,7 @@ N_FFT = 2048
 HOP_LENGTH = 512
 
 # Nama file yang diharapkan (sesuaikan jika berbeda)
-EMBEDDING_MODELS = "build_embedding_model(input_shape)"     # prefer: model utuh
+EMBEDDING_MODELS = "embedding_model.keras"     # prefer: model utuh
 PREPROCESS_FILE = "preprocess.joblib"               # scaler_usia + ohe (gender, provinsi)
 
 # Batas UI agar tidak terlalu berat di Streamlit Cloud
