@@ -3,7 +3,6 @@ import tensorflow as tf
 import numpy as np
 import librosa
 import librosa.display
-import matplotlib.pyplot as plt
 import joblib
 import os
 from sklearn.preprocessing import StandardScaler
