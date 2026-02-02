@@ -38,10 +38,8 @@ mel_spec_size = (128, 64, 1)
 
 def create_embedding_model(input_shape=(128, 128, 1)):
     model = keras.Sequential([
-        keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=input_shape),
-        keras.layers.MaxPooling2D((2, 2)),
-        keras.layers.Conv2D(64, (3, 3), activation='relu'),
-        keras.layers.MaxPooling2D((2, 2)),
+        layers.Conv2D(128, (3,3), activation='relu'),
+        layers.MaxPooling2D((2,2)),
         keras.layers.Flatten(),
         keras.layers.Dense(128, activation='relu'),
         keras.layers.Dense(64, activation='relu')  # Embedding layer
