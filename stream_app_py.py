@@ -19,7 +19,36 @@ def predict_accent(audio_path):
     # Placeholder untuk prediksi aksen
     aksen = "Jakarta"  # Misalnya hasil prediksi aksen
     return aksen
-
+# Create tabs
+    tab1, tab2, tab3 = st.tabs(["📊 Upload Audio", "🎯 Multi-Task Results", "📈 Model Information"])
+    
+    with tab1:
+        st.header("Upload Audio File")
+        
+        # File uploader
+        uploaded_file = st.file_uploader(
+            "Choose an audio file (.wav format)",
+            type=["wav", "mp3", "m4a"],
+            help="Upload an audio file to detect accent, gender, and province"
+        )
+        
+        # Metadata input
+        st.subheader("Additional Information (Optional)")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            usia = st.number_input("Age", min_value=0, max_value=100, value=25)
+        
+        with col2:
+            gender = st.selectbox("Gender", ["Male", "Female"])
+        
+        with col3:
+            # Indonesian provinces
+            provinces = [
+                "Jawa Barat", "Jawa Tengah", "Jawa Timur", "Yogyakarta", 
+                , "Jakarta"
+            ]
+            provinsi = st.selectbox("Province")
 # Main app
 def main():
     # Initialize session state
