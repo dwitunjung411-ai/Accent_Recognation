@@ -14,6 +14,7 @@ def load_metadata(csv_path):
 def predict_accent(audio_path):
     # Memuat model aksen
     model = tf.keras.models.load_model("model_aksen.keras")
+    return model
         
     
     # Ekstraksi fitur audio (MFCC)
