@@ -94,6 +94,14 @@ def main():
             ["Upload Audio", "Use Sample Audio"]
         )
         
+        # Metadata inputs
+        st.subheader("📋 Metadata")
+        usia = st.number_input("Usia", 0, 100, 25)
+        gender = st.selectbox("Gender", ["Male", "Female"])
+        provinsi = st.selectbox("Provinsi", [
+            "Jawa Barat", "Jawa Tengah", "Jawa Timur", 
+            "Yogyakarta", "Bali", "Sumatera Utara"
+        ])
     
     # Main content area
     col1, col2 = st.columns([2, 1])
