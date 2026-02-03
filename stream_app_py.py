@@ -93,13 +93,14 @@ def main():
                         provinsi = metadata_info['provinsi'].values[0]
                         
                         # Tampilkan metadata yang terkait dengan audio
-                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-calendar'></i> **Usia:** {usia}</h2>", unsafe_allow_html=True)
-                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-venus-mars'></i> **Gender:** {gender}</h2>", unsafe_allow_html=True)
-                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-map-marker-alt'></i> **Provinsi:** {provinsi}</h2>", unsafe_allow_html=True)
+                        # Tampilkan metadata yang terkait dengan audio
+                        st.markdown(f"<h2 style='color:#FFFFFF;'><i class='fas fa-calendar'></i> 📅Usia: {usia}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FFFFFF;'><i class='fas fa-venus-mars'></i> 🗣️Gender: {gender}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FFFFFF;'><i class='fas fa-map-marker-alt'></i> 📍Provinsi: {provinsi}</h2>", unsafe_allow_html=True)
                         
                         # Prediksi aksen dari audio yang di-upload
-                        aksen, aksen_conf = predict_accent(tmp_path)
-                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-volume-up'></i> **Prediksi Aksen:** {aksen} - {aksen_conf*100:.2f}%</h2>", unsafe_allow_html=True)
+                        aksen = predict_accent(tmp_path)
+                        st.markdown(f"<h2 style='color:#FFFFFF;'><i class='fas fa-volume-up'></i> 🎭Prediksi Aksen: {aksen}</h2>", unsafe_allow_html=True)
                     else:
                         st.write("Metadata tidak ditemukan untuk audio ini.")
                 
