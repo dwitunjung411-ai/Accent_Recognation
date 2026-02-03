@@ -91,7 +91,7 @@ def main():
         # Demo mode selection
         demo_mode = st.radio(
             "Select Mode:",
-            ["Upload Audio", "Use Sample Audio"]
+            ["Upload Audio"]
         )
         
         # Metadata inputs
@@ -122,11 +122,6 @@ def main():
             st.info("Using sample audio for demonstration")
             # You can add actual sample audio files here
     
-    with col2:
-        st.header("Metadata Summary")
-        st.metric("Usia", usia)
-        st.metric("Gender", gender)
-        st.metric("Provinsi", provinsi)
     
     # Process audio if available
     if audio_file is not None or demo_mode == "Use Sample Audio":
