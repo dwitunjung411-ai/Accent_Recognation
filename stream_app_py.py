@@ -37,7 +37,7 @@ def predict_accent(audio_path):
 # Fungsi untuk memuat model aksen yang sudah terlatih
 def load_accent_model():
     # Memuat model yang sudah terlatih dalam format .keras
-    model = tf.keras.models.load_model("model_aksen.keras")  # Path ke model aksen Anda
+    model = ("model_aksen.keras")  # Path ke model aksen Anda
     return model
 
 # Main app
