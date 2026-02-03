@@ -36,7 +36,15 @@ def main():
             "Select Mode:",
             ["Upload Audio"]
         )
-    
+        
+        # Metadata inputs
+        st.subheader("📋 Metadata")
+        usia = st.number_input("Usia", 0, 100, 25)
+        gender = st.selectbox("Gender", ["Male", "Female"])
+        provinsi = st.selectbox("Provinsi", [
+            "Jawa Barat", "Jawa Tengah", "Jawa Timur", 
+            "Yogyakarta", "Jakarta"
+        ])
     
     # Main content area
     col1, col2 = st.columns([2, 1])
@@ -57,6 +65,11 @@ def main():
             st.info("Using sample audio for demonstration")
             # You can add actual sample audio files here
     
+    with col2:
+        st.header("Metadata Summary")
+        st.metric("Usia", usia)
+        st.metric("Gender", gender)
+        st.metric("Provinsi", provinsi)
     
     # Process audio if available
     if audio_file is not None or demo_mode == "Use Sample Audio":
@@ -93,13 +106,13 @@ def main():
                         provinsi = metadata_info['provinsi'].values[0]
                         
                         # Tampilkan metadata yang terkait dengan audio
-                        st.markdown(f"<h2 style='color:#FFFFFF;'><i class='fas fa-calendar'></i> 📅Usia: {usia}</h2>", unsafe_allow_html=True)
-                        st.markdown(f"<h2 style='color:#FFFFFF;'><i class='fas fa-venus-mars'></i> 🗣️Gender: {gender}</h2>", unsafe_allow_html=True)
-                        st.markdown(f"<h2 style='color:#FFFFFF;'><i class='fas fa-map-marker-alt'></i> 📍Provinsi: {provinsi}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-calendar'></i> **Usia:** {usia}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-venus-mars'></i> **Gender:** {gender}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-map-marker-alt'></i> **Provinsi:** {provinsi}</h2>", unsafe_allow_html=True)
                         
                         # Prediksi aksen dari audio yang di-upload
-                        aksen = predict_accent(tmp_path)
-                        st.markdown(f"<h2 style='color:#FFFFFF;'><i class='fas fa-volume-up'></i> 🎭Prediksi Aksen: {aksen}</h2>", unsafe_allow_html=True)
+                        aksen, aksen_conf = predict_accent(tmp_path)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-volume-up'></i> **Prediksi Aksen:** {aksen} - {aksen_conf*100:.2f}%</h2>", unsafe_allow_html=True)
                     else:
                         st.write("Metadata tidak ditemukan untuk audio ini.")
                 
