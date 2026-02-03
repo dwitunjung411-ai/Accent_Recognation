@@ -43,7 +43,7 @@ def load_encoders():
     scaler_usia = StandardScaler()
     
     # Fit with dummy data
-    le_y.fit(["Sunda", "Jawa_Tengah", "Jawa_Timur", "YogyaKarta", "Betawi])
+    le_y.fit(["Sunda", "Jawa_Tengah", "Jawa_Timur", "YogyaKarta", "Betawi"])
     le_gender.fit(["Male", "Female"])
     le_provinsi.fit(["Jawa Barat", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "DKI Jakarta"])
     
