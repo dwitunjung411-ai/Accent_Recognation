@@ -4,6 +4,7 @@ import pandas as pd
 import librosa
 import tempfile
 import os
+import tensorflow as tf
 
 # Fungsi untuk memuat metadata CSV
 def load_metadata(csv_path):
@@ -11,14 +12,33 @@ def load_metadata(csv_path):
 
 # Fungsi untuk memproses file audio dan memprediksi aksen
 def predict_accent(audio_path):
-    # Ini adalah tempat Anda melakukan ekstraksi fitur dan prediksi aksen dengan model Anda
-    # Misalnya menggunakan librosa untuk ekstraksi MFCC
+    # Memuat model aksen
+    model = load_accent_model()
+    
+    # Ekstraksi fitur audio (MFCC)
     y, sr = librosa.load(audio_path, sr=None)
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-    # Lakukan prediksi aksen di sini (model.predict(mfcc))
-    # Placeholder untuk prediksi aksen
-    aksen = "Jakarta"  # Misalnya hasil prediksi aksen
-    return aksen
+    
+    # Menyesuaikan bentuk data untuk model (jika perlu)
+    mfcc = np.expand_dims(mfcc, axis=-1)  # Menambahkan dimensi saluran jika model membutuhkan
+
+    # Melakukan prediksi aksen
+    aksen_probs = model.predict(np.expand_dims(mfcc, axis=0))  # Tambahkan dimensi batch
+    
+    # Menampilkan probabilitas untuk setiap aksen
+    aksen_classes = ["Sunda", "Jawa_Tengah", "Jawa_Timur", "YogyaKarta", "Betawi"]  # Sesuaikan dengan kelas aksen Anda
+    predicted_accent = aksen_classes[np.argmax(aksen_probs)]
+    
+    # Menghitung probabilitas (kepercayaan model)
+    accuracy = np.max(aksen_probs)  # Akurasi = probabilitas tertinggi
+
+    return predicted_accent, accuracy
+
+# Fungsi untuk memuat model aksen yang sudah terlatih
+def load_accent_model():
+    # Gantilah dengan path model Anda yang sudah terlatih
+    model = tf.keras.models.load_model("model_aksen.h5")  # Path ke model aksen Anda
+    return model
 
 # Main app
 def main():
@@ -105,13 +125,13 @@ def main():
                         provinsi = metadata_info['provinsi'].values[0]
                         
                         # Tampilkan metadata yang terkait dengan audio
-                        st.write(f"**Usia**: {usia}")
-                        st.write(f"**Gender**: {gender}")
-                        st.write(f"**Provinsi**: {provinsi}")
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-calendar'></i> **Usia:** {usia}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-venus-mars'></i> **Gender:** {gender}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-map-marker-alt'></i> **Provinsi:** {provinsi}</h2>", unsafe_allow_html=True)
                         
                         # Prediksi aksen dari audio yang di-upload
-                        aksen = predict_accent(tmp_path)
-                        st.write(f"**Prediksi Aksen**: {aksen}")
+                        aksen, accuracy = predict_accent(tmp_path)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-volume-up'></i> 🎭 **Prediksi Aksen:** {aksen} - {accuracy*100:.2f}%</h2>", unsafe_allow_html=True)
                     else:
                         st.write("Metadata tidak ditemukan untuk audio ini.")
                 
