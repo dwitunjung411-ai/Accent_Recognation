@@ -43,7 +43,7 @@ def load_encoders():
     scaler_usia = StandardScaler()
     
     # Fit with dummy data
-    le_y.fit(["Sunda", "Jawa_Tengah", "Jawa_Timur", "YogyaKarta", "Betawi])
+    le_y.fit(["Sunda", "Jawa_Tengah", "Jawa_Timur", "YogyaKarta", "Betawi"])
     le_gender.fit(["Male", "Female"])
     le_provinsi.fit(["Jawa Barat", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "DKI Jakarta"])
     
@@ -94,14 +94,6 @@ def main():
             ["Upload Audio", "Use Sample Audio"]
         )
         
-        # Metadata inputs
-        st.subheader("📋 Metadata")
-        usia = st.number_input("Usia", 0, 100, 25)
-        gender = st.selectbox("Gender", ["Male", "Female"])
-        provinsi = st.selectbox("Provinsi", [
-            "Jawa Barat", "Jawa Tengah", "Jawa Timur", 
-            "Yogyakarta", "Bali", "Sumatera Utara"
-        ])
     
     # Main content area
     col1, col2 = st.columns([2, 1])
