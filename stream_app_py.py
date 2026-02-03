@@ -13,7 +13,8 @@ def load_metadata(csv_path):
 # Fungsi untuk memproses file audio dan memprediksi aksen
 def predict_accent(audio_path):
     # Memuat model aksen
-    model = 'model_aksen.h5'
+    model = tf.keras.models.load_model("model_aksen.keras")
+        return model
     
     # Ekstraksi fitur audio (MFCC)
     y, sr = librosa.load(audio_path, sr=None)
