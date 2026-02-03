@@ -36,14 +36,7 @@ def main():
             ["Upload Audio"]
         )
         
-        # Metadata inputs
-        st.subheader("📋 Metadata")
-        usia = st.number_input("Usia", 0, 100, 25)
-        gender = st.selectbox("Gender", ["Male", "Female"])
-        provinsi = st.selectbox("Provinsi", [
-            "Jawa Barat", "Jawa Tengah", "Jawa Timur", 
-            "Yogyakarta", "DKI Jakarta"
-        ])
+        
     
     # Main content area
     col1, col2 = st.columns([2, 1])
@@ -64,11 +57,7 @@ def main():
             st.info("Using sample audio for demonstration")
             # You can add actual sample audio files here
     
-    with col2:
-        st.header("Metadata Summary")
-        st.metric("Usia", usia)
-        st.metric("Gender", gender)
-        st.metric("Provinsi", provinsi)
+    
     
     # Process audio if available
     if audio_file is not None or demo_mode == "Use Sample Audio":
