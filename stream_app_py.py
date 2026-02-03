@@ -56,24 +56,7 @@ def main():
             # Create a sample audio option
             st.info("Using sample audio for demonstration")
             # You can add actual sample audio files here
-    def plot_mel_spectrogram(audio_file):
-    # Load audio file
-    y, sr = librosa.load(audio_file, sr=None)
-
-    # Calculate the Mel spectrogram
-    mel_spectrogram = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
-
-    # Convert to dB scale for better visualization
-    mel_spectrogram_db = librosa.power_to_db(mel_spectrogram, ref=np.max)
-
-    # Create a plot
-    plt.figure(figsize=(10, 6))
-    librosa.display.specshow(mel_spectrogram_db, x_axis='time', y_axis='mel', sr=sr)
-    plt.colorbar(format='%+2.0f dB')
-    plt.title('Mel Spectrogram')
-
-    # Display the plot in Streamlit
-    st.pyplot(plt)
+    
     
     
     # Process audio if available
