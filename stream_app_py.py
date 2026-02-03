@@ -94,9 +94,9 @@ def main():
                         provinsi = metadata_info['provinsi'].values[0]
                         
                         # Tampilkan metadata yang terkait dengan audio
-                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-calendar'></i> **Usia:** {usia}</h2>", unsafe_allow_html=True)
-                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-venus-mars'></i> **Gender:** {gender}</h2>", unsafe_allow_html=True)
-                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-map-marker-alt'></i> **Provinsi:** {provinsi}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-calendar'></i> 📅Usia: {usia}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-venus-mars'></i> 🗣️Gender: {gender}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-map-marker-alt'></i> 🌍Provinsi: {provinsi}</h2>", unsafe_allow_html=True)
                         
                         # Prediksi aksen dari audio yang di-upload
                         aksen = predict_accent(tmp_path)
