@@ -99,7 +99,8 @@ def main():
                         
                         # Prediksi aksen dari audio yang di-upload
                         aksen = predict_accent(tmp_path)
-                        st.markdown(f"<h2 style='color:#FFFFFF;'><i class='fas fa-volume-up'></i> 🎭Prediksi Aksen: {aksen} - {aksen_conf*100:.2f}%</h2>", unsafe_allow_html=True)
+                        aksen, accuracy = predict_accent(tmp_path)
+                        st.markdown(f"<h2 style='color:#FFFFFF;'><i class='fas fa-volume-up'></i> 🎭 **Prediksi Aksen:** {aksen} - {accuracy*100:.2f}%</h2>", unsafe_allow_html=True)
                     else:
                         st.write("Metadata tidak ditemukan untuk audio ini.")
                 
