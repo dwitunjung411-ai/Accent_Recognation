@@ -85,23 +85,19 @@ def main():
         st.session_state.prediction_made = False
     
     # Sidebar
-    with st.sidebar:
-        st.header("⚙️ Settings")
-        
-        # Demo mode selection
-        demo_mode = st.radio(
-            "Select Mode:",
-            ["Upload Audio"]
-        )
-        
-        # Metadata inputs
-        st.subheader("📋 Metadata")
+    # Hapus atau sembunyikan metadata dari tampilan
+with st.sidebar:
+    st.header("⚙️ Settings")
+    
+    # Demo mode selection
+    demo_mode = st.radio("Select Mode:", ["Upload Audio"])
+    
+    # Jika ingin menyembunyikan metadata
+    show_metadata = st.checkbox("Tampilkan Metadata", value=False)
+    if show_metadata:
         usia = st.number_input("Usia", 0, 100, 25)
         gender = st.selectbox("Gender", ["Male", "Female"])
-        provinsi = st.selectbox("Provinsi", [
-            "Jawa Barat", "Jawa Tengah", "Jawa Timur", 
-            "Yogyakarta", "Jakarta"
-        ])
+        provinsi = st.selectbox("Provinsi", ["Jawa Barat", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Jakarta"])
     
     # Main content area
     col1, col2 = st.columns([2, 1])
