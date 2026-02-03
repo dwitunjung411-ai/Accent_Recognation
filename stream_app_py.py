@@ -121,7 +121,11 @@ def main():
             # Create a sample audio option
             st.info("Using sample audio for demonstration")
             # You can add actual sample audio files here
-    
+    with col2:
+        st.header("Metadata Summary")
+        st.metric("Usia", usia)
+        st.metric("Gender", gender)
+        st.metric("Provinsi", provinsi)
     
     # Process audio if available
     if audio_file is not None or demo_mode == "Use Sample Audio":
