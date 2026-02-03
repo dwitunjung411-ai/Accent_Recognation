@@ -43,7 +43,7 @@ def load_encoders():
     scaler_usia = StandardScaler()
     
     # Fit with dummy data
-    le_y.fit(["Sunda", "Jawa_Tengah", "Jawa_Timur", "YogyaKarta", "Betawi"])
+    le_y.fit(["Sunda", "Jawa_Tengah", "Jawa_Timur", "YogyaKarta", "Betawi])
     le_gender.fit(["Male", "Female"])
     le_provinsi.fit(["Jawa Barat", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "DKI Jakarta"])
     
@@ -85,19 +85,23 @@ def main():
         st.session_state.prediction_made = False
     
     # Sidebar
-    # Hapus atau sembunyikan metadata dari tampilan
-with st.sidebar:
-    st.header("⚙️ Settings")
-    
-    # Demo mode selection
-    demo_mode = st.radio("Select Mode:", ["Upload Audio"])
-    
-    # Jika ingin menyembunyikan metadata
-    show_metadata = st.checkbox("Tampilkan Metadata", value=False)
-    if show_metadata:
+    with st.sidebar:
+        st.header("⚙️ Settings")
+        
+        # Demo mode selection
+        demo_mode = st.radio(
+            "Select Mode:",
+            ["Upload Audio", "Use Sample Audio"]
+        )
+        
+        # Metadata inputs
+        st.subheader("📋 Metadata")
         usia = st.number_input("Usia", 0, 100, 25)
         gender = st.selectbox("Gender", ["Male", "Female"])
-        provinsi = st.selectbox("Provinsi", ["Jawa Barat", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Jakarta"])
+        provinsi = st.selectbox("Provinsi", [
+            "Jawa Barat", "Jawa Tengah", "Jawa Timur", 
+            "Yogyakarta", "Jakarta"
+        ])
     
     # Main content area
     col1, col2 = st.columns([2, 1])
