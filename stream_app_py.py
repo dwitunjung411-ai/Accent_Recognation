@@ -87,7 +87,13 @@ def main():
     # Sidebar
     with st.sidebar:
         st.header("⚙️ Settings")
+         # Demo mode selection
+        demo_mode = st.radio(
+            "Select Mode:",
+            ["Upload Audio", "Use Sample Audio"]
+        )
         
+       
        
     # Main content area
     col1, col2 = st.columns([2, 1])
