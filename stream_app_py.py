@@ -42,7 +42,7 @@ def main():
         gender = st.selectbox("Gender", ["Male", "Female"])
         provinsi = st.selectbox("Provinsi", [
             "Jawa Barat", "Jawa Tengah", "Jawa Timur", 
-            "Yogyakarta", "Jakarta"
+            "Yogyakarta", "DKI Jakarta"
         ])
     
     # Main content area
@@ -62,9 +62,13 @@ def main():
         else:
             # Create a sample audio option
             st.info("Using sample audio for demonstration")
-            
+            # You can add actual sample audio files here
     
-   
+    with col2:
+        st.header("Metadata Summary")
+        st.metric("Usia", usia)
+        st.metric("Gender", gender)
+        st.metric("Provinsi", provinsi)
     
     # Process audio if available
     if audio_file is not None or demo_mode == "Use Sample Audio":
@@ -101,13 +105,13 @@ def main():
                         provinsi = metadata_info['provinsi'].values[0]
                         
                         # Tampilkan metadata yang terkait dengan audio
-                        st.write(f"**Usia**: {usia}")
-                        st.write(f"**Gender**: {gender}")
-                        st.write(f"**Provinsi**: {provinsi}")
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-calendar'></i> **Usia:** {usia}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-venus-mars'></i> **Gender:** {gender}</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-map-marker-alt'></i> **Provinsi:** {provinsi}</h2>", unsafe_allow_html=True)
                         
                         # Prediksi aksen dari audio yang di-upload
                         aksen = predict_accent(tmp_path)
-                        st.write(f"**Prediksi Aksen**: {aksen}")
+                        st.markdown(f"<h2 style='color:#FF6347;'><i class='fas fa-volume-up'></i> **Prediksi Aksen:** {aksen}</h2>", unsafe_allow_html=True)
                     else:
                         st.write("Metadata tidak ditemukan untuk audio ini.")
                 
