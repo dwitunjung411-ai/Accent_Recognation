@@ -88,21 +88,7 @@ def main():
     with st.sidebar:
         st.header("⚙️ Settings")
         
-        # Demo mode selection
-        demo_mode = st.radio(
-            "Select Mode:",
-            ["Upload Audio", "Use Sample Audio"]
-        )
-        
-        # Metadata inputs
-        st.subheader("📋 Metadata")
-        usia = st.number_input("Usia", 0, 100, 25)
-        gender = st.selectbox("Gender", ["Male", "Female"])
-        provinsi = st.selectbox("Provinsi", [
-            "Jawa Barat", "Jawa Tengah", "Jawa Timur", 
-            "Yogyakarta", "Jakarta"
-        ])
-    
+       
     # Main content area
     col1, col2 = st.columns([2, 1])
     
