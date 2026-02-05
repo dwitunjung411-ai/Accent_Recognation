@@ -93,7 +93,7 @@ def main():
         st.divider()
         st.audio(audio_file, format="audio/wav")
 
-        if st.button("🚀 Extract Features and Predict", type="primary"):
+        if st.button("🚀 Extract Features and Detect", type="primary"):
             with st.spinner("Processing audio..."):
                 try:
                     # Simpan audio sementara
@@ -112,15 +112,15 @@ def main():
                         provinsi = metadata_info['provinsi'].values[0]
 
                         st.subheader("Informasi Pembicara:")
-                        st.write(f"**Usia:** {usia}")
-                        st.write(f"**Gender:** {gender}")
-                        st.write(f"**Provinsi:** {provinsi}")
+                        st.write(f"📅Usia: {usia}")
+                        st.write(f"🗣️Gender: {gender}")
+                        st.write(f"📍Provinsi: {provinsi}")
 
                     # PROSES PREDIKSI
                     # Melewatkan objek model_aksen (bukan string) ke fungsi
                     hasil_aksen = predict_accent(tmp_path, model_aksen)
 
-                    st.success(f"### 🎭 Prediksi Aksen: {hasil_aksen}")
+                    st.success(f"### 🎭 Deteksi Aksen: {hasil_aksen}")
 
                     # Hapus file sementara
                     os.unlink(tmp_path)
