@@ -33,14 +33,18 @@ class PrototypicalNetwork(tf.keras.Model):
 # ==========================================================
 @st.cache_resource
 def load_accent_model():
-    model_path = "model_aksen.keras"
+    model_path = "model_aksen.keras" # Pastikan nama ini SAMA dengan di GitHub
     if os.path.exists(model_path):
-        # Menyertakan custom_objects agar PrototypicalNetwork dikenali
-        custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
-        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
-        return model
+        try:
+            # Gunakan penamaan yang sesuai dengan metadata model Anda
+            custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+            model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+            return model
+        except Exception as e:
+            st.error(f"Error saat loading: {e}")
+            return None
     else:
-        st.error(f"File {model_path} tidak ditemukan!")
+        st.error(f"File {model_path} tidak ditemukan di server!")
         return None
 
 # Load model secara global
