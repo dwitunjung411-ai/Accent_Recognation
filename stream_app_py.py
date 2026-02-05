@@ -88,7 +88,7 @@ def main():
             st.audio(audio_file, format="audio/wav")
         
         # Feature extraction button
-        if st.button("🚀 Extract Features and Predict", type="primary"):
+        if st.button("🚀 Extract Features and Detect", type="primary"):
             with st.spinner("Processing audio..."):
                 try:
                     # Save uploaded file temporarily
