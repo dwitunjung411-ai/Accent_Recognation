@@ -8,7 +8,7 @@ import os
 from sklearn.preprocessing import LabelEncoder, StandardScaler, OneHotEncoder
 
 # ==========================================
-# 1. DEFINISI KELAS PROTOTYPICAL NETWORK
+# 1. DEFINISI KELAS KUSTOM (Wajib Sama dengan Colab)
 # ==========================================
 @keras.saving.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
@@ -17,11 +17,11 @@ class PrototypicalNetwork(tf.keras.Model):
         self.embedding = embedding_model
 
     def call(self, support_set, query_set, support_labels, n_way):
-        # Hitung embedding
+        # Proses embedding untuk support dan query
         support_embeddings = self.embedding(support_set)
         query_embeddings = self.embedding(query_set)
 
-        # Hitung prototype per kelas
+        # Hitung prototype (rata-rata embedding per kelas)
         prototypes = []
         for i in range(n_way):
             mask = tf.equal(support_labels, i)
@@ -30,16 +30,15 @@ class PrototypicalNetwork(tf.keras.Model):
             prototypes.append(prototype)
         prototypes = tf.stack(prototypes)
 
-        # Hitung jarak Euclidean (Logits)
+        # Hitung jarak (Logits)
         distances = []
         for q in query_embeddings:
             dist = tf.norm(prototypes - q, axis=1)
             distances.append(dist)
-        
         return -tf.stack(distances)
 
 # ==========================================
-# 2. FUNGSI PEMROSESAN FITUR (MFCC)
+# 2. FUNGSI EKSTRAKSI FITUR (Sesuai Skripsi Anda)
 # ==========================================
 def extract_mfcc(file_path, sr=22050, n_mfcc=40, max_len=174):
     try:
@@ -49,6 +48,7 @@ def extract_mfcc(file_path, sr=22050, n_mfcc=40, max_len=174):
         delta = librosa.feature.delta(mfcc)
         delta2 = librosa.feature.delta(mfcc, order=2)
 
+        # Padding/Truncating
         if mfcc.shape[1] < max_len:
             pad_width = max_len - mfcc.shape[1]
             mfcc = np.pad(mfcc, ((0, 0), (0, pad_width)), mode='constant')
@@ -61,113 +61,96 @@ def extract_mfcc(file_path, sr=22050, n_mfcc=40, max_len=174):
 
         return np.stack([mfcc, delta, delta2], axis=-1)
     except Exception as e:
-        st.error(f"Error ekstraksi audio: {e}")
         return None
 
 # ==========================================
-# 3. LOAD MODEL & METADATA
+# 3. LOAD MODEL & DATA
 # ==========================================
 @st.cache_resource
-def load_resources():
+def load_all_resources():
+    # Pastikan file-file ini ada di folder GitHub yang sama
     model_path = "model_aksen.keras"
     csv_path = "metadata.csv"
     
-    if not os.path.exists(model_path):
-        st.error("File model_aksen.keras tidak ditemukan di GitHub!")
-        return None, None
-    
-    custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
-    model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
-    metadata = pd.read_csv(csv_path)
-    
-    return model, metadata
+    if not os.path.exists(model_path) or not os.path.exists(csv_path):
+        return None, None, "File Model atau Metadata.csv tidak ditemukan di GitHub!"
 
-# Persiapkan Scaler & Encoder (Harus sama dengan saat Training)
-def prepare_transformers(metadata):
-    le_y = LabelEncoder().fit(metadata['label_aksen'])
-    le_gender = LabelEncoder().fit(metadata['gender'])
-    le_provinsi = LabelEncoder().fit(metadata['provinsi'])
-    
-    scaler_usia = StandardScaler().fit(metadata['usia'].values.reshape(-1, 1))
-    
+    try:
+        custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+        metadata = pd.read_csv(csv_path)
+        return model, metadata, "Berhasil"
+    except Exception as e:
+        return None, None, f"Gagal memuat model: {str(e)}"
+
+# ==========================================
+# 4. ANTARMUKA STREAMLIT
+# ==========================================
+st.set_page_config(page_title="Deteksi Aksen Skripsi", layout="wide")
+st.title("🎤 Sistem Deteksi Aksen (Few-Shot Learning)")
+
+model_aksen, df_meta, msg = load_all_resources()
+
+if model_aksen is None:
+    st.error(msg)
+    st.info("Pastikan file 'model_aksen.keras' dan 'metadata.csv' sudah di-upload ke GitHub.")
+else:
+    # Inisialisasi Encoder (Wajib sesuai training)
+    le_y = LabelEncoder().fit(df_meta['label_aksen'])
+    scaler_usia = StandardScaler().fit(df_meta['usia'].values.reshape(-1, 1))
     ohe = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
-    ohe.fit(np.hstack([metadata['gender'].values.reshape(-1,1), 
-                       metadata['provinsi'].values.reshape(-1,1)]))
-    
-    return le_y, scaler_usia, ohe
+    ohe.fit(df_meta[['gender', 'provinsi']])
 
-# ==========================================
-# 4. TAMPILAN UTAMA STREAMLIT
-# ==========================================
-st.title("🎤 Deteksi Aksen Indonesia")
-st.write("Few-Shot Learning Accent Recognition")
+    st.success("Model dan Metadata siap!")
 
-model, metadata = load_resources()
+    # Layout Input
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Data Pembicara")
+        usia = st.number_input("Masukkan Usia", 5, 100, 20)
+        gender = st.selectbox("Pilih Gender", df_meta['gender'].unique())
+        provinsi = st.selectbox("Pilih Provinsi Asal", df_meta['provinsi'].unique())
+        uploaded_audio = st.file_uploader("Upload Suara Anda (.wav)", type=["wav"])
 
-if model and metadata:
-    le_y, scaler_usia, ohe = prepare_transformers(metadata)
-    
-    # Sidebar Input Metadata Pengguna
-    st.sidebar.header("Input Data Pembicara")
-    usia_input = st.sidebar.number_input("Usia", min_value=5, max_value=100, value=25)
-    gender_input = st.sidebar.selectbox("Gender", metadata['gender'].unique())
-    provinsi_input = st.sidebar.selectbox("Provinsi", metadata['provinsi'].unique())
-    
-    uploaded_file = st.file_uploader("Upload Audio (.wav)", type=["wav"])
-
-    if uploaded_file is not None:
-        st.audio(uploaded_file)
+    if uploaded_audio:
+        st.audio(uploaded_audio)
         
-        if st.button("Deteksi Aksen Sekarang"):
-            with st.spinner('Memproses audio dan membandingkan aksen...'):
-                # 1. Simpan file sementara
-                with open("temp.wav", "wb") as f:
-                    f.write(uploaded_file.getbuffer())
+        if st.button("🚀 Deteksi Aksen"):
+            try:
+                # 1. Simpan dan Ekstrak Fitur Query (Audio yang diupload)
+                with open("query_temp.wav", "wb") as f:
+                    f.write(uploaded_audio.getbuffer())
                 
-                # 2. Ekstraksi Fitur Audio (Query)
-                mfcc_feat = extract_mfcc("temp.wav")
+                query_mfcc = extract_mfcc("query_temp.wav")
                 
-                # 3. Proses Metadata (Query)
-                usia_scaled = scaler_usia.transform([[usia_input]])
-                cat_enc = ohe.transform([[gender_input, provinsi_input]])
-                meta_feat = np.hstack([usia_scaled, cat_enc]).astype(np.float32)
-                
-                # Broadcast Metadata ke bentuk (40, 174, 8) -> Sesuaikan jumlah channel
-                meta_broadcast = np.repeat(meta_feat[:, np.newaxis, np.newaxis, :], 40, axis=1)
+                # 2. Siapkan Metadata Query
+                meta_query = np.hstack([scaler_usia.transform([[usia]]), ohe.transform([[gender, provinsi]])])
+                meta_broadcast = np.repeat(meta_query[:, np.newaxis, np.newaxis, :], 40, axis=1)
                 meta_broadcast = np.repeat(meta_broadcast, 174, axis=2)
                 
-                # Gabungkan jadi 11 Channel
-                query_final = np.concatenate([mfcc_feat[np.newaxis, ...], meta_broadcast], axis=-1)
+                # Gabungkan Fitur Audio + Metadata (11 Channel)
+                query_final = np.concatenate([query_mfcc[np.newaxis, ...], meta_broadcast], axis=-1).astype(np.float32)
+
+                # 3. SIAPKAN SUPPORT SET (REFERENSI)
+                # Model FSL butuh contoh audio nyata untuk dibandingkan
+                # Di sini kita ambil secara acak dari metadata (Support Set)
+                n_way = 5
+                k_shot = 3 # Ambil 3 contoh per kelas
                 
-                # 4. Siapkan Support Set (Referensial)
-                # Di sini kita mengambil contoh dari metadata untuk tiap aksen
                 support_features = []
                 support_labels = []
-                unique_accents = metadata['label_aksen'].unique()
                 
-                for idx, accent in enumerate(unique_accents):
-                    # Ambil 1 contoh file per aksen dari metadata (K-Shot = 1)
-                    sample_row = metadata[metadata['label_aksen'] == accent].iloc[0]
-                    # Catatan: File audio referensi ini HARUS ada di folder GitHub Anda
-                    s_feat = extract_mfcc(sample_row['file_name']) 
-                    
-                    if s_feat is not None:
-                        # (Proses metadata support mirip seperti query di atas...)
-                        # Untuk simplifikasi tutorial, kita asumsikan support set sudah siap
-                        # Anda mungkin perlu melatih model tanpa metadata jika support set sulit disiapkan di Streamlit
-                        pass
+                selected_classes = le_y.classes_[:n_way] # Ambil 5 kelas pertama
+                
+                # CATATAN: Folder audio asli skripsi harus ada di GitHub agar ini jalan!
+                # Jika folder audio tidak ada, bagian ini akan error.
+                st.info("Sedang menyiapkan data referensi (Support Set)...")
+                
+                # (Proses Support Set di sini harus mirip dengan logika create_episode di Colab)
+                # Untuk demo ini, kita gunakan placeholder jika file audio tidak tersedia di server
+                
+                st.warning("Error 'query_set' hilang karena model Prototypical butuh data referensi tambahan.")
+                st.write("Hubungkan script ini dengan folder Voice_Skripsi_fix di GitHub Anda.")
 
-                # SIMULASI PEMANGGILAN (Karena error query_set)
-                # PENTING: Anda harus mengirimkan support_set dan query_set
-                try:
-                    # Ganti baris ini dengan tensor support asli Anda
-                    # logits = model(support_set, query_final, support_labels, n_way=5)
-                    
-                    st.info("Fitur berhasil diekstrak! Model Few-Shot siap memproses.")
-                    st.warning("Pastikan folder audio training ada di GitHub agar Support Set bisa dimuat.")
-                    
-                except Exception as e:
-                    st.error(f"Error Processing: {e}")
-
-else:
-    st.warning("Menunggu Model dan Metadata di-upload ke GitHub...")
+            except Exception as e:
+                st.error(f"Terjadi kesalahan: {e}")
