@@ -28,7 +28,7 @@ class PrototypicalNetwork(tf.keras.Model):
 # ==========================================================
 @st.cache_resource
 def load_accent_model():
-    model ="model_aksen.keras(1)"
+    model_path = "model_aksen.keras"
     if os.path.exists(model_path):
         # Menyertakan custom_objects agar PrototypicalNetwork dikenali
         custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
@@ -112,9 +112,9 @@ def main():
                         provinsi = metadata_info['provinsi'].values[0]
 
                         st.subheader("Informasi Pembicara:")
-                        st.write(f"📅Usia: {usia}")
-                        st.write(f"🗣️Gender: {gender}")
-                        st.write(f"📍Provinsi: {provinsi}")
+                        st.write(f"**Usia:** {usia}")
+                        st.write(f"**Gender:** {gender}")
+                        st.write(f"**Provinsi:** {provinsi}")
 
                     # PROSES PREDIKSI
                     # Melewatkan objek model_aksen (bukan string) ke fungsi
