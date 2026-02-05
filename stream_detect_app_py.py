@@ -1,152 +1,146 @@
 import streamlit as st
-import tensorflow as tf
-import keras
-import librosa
 import numpy as np
 import pandas as pd
+import librosa
+import tempfile
 import os
-from sklearn.preprocessing import LabelEncoder, StandardScaler, OneHotEncoder
+import tensorflow as tf
+from tensorflow.keras.models import load_model
 
-# ==========================================
-# 1. DEFINISI KELAS PROTOTYPICAL NETWORK
-# ==========================================
-@keras.saving.register_keras_serializable(package="Custom")
+# ==========================================================
+# 1. DEFINISI CLASS PROTOTYPICAL NETWORK (WAJIB ADA)
+# Pastikan kode di dalam class ini persis sama dengan di Colab kamu
+# ==========================================================
+@tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
+    def __init__(self, encoder, **kwargs):
     def __init__(self, embedding_model=None, **kwargs):
         super(PrototypicalNetwork, self).__init__(**kwargs)
+        self.encoder = encoder
+
+    def call(self, inputs):
+        return self.encoder(inputs)
+
+    # Tambahkan metode predict jika kamu mendefinisikannya secara custom di Colab
+    def predict(self, x):
+        return self.encoder.predict(x)
         self.embedding = embedding_model
 
     def call(self, support_set, query_set, support_labels, n_way):
-        # Hitung embedding untuk referensi dan input baru
-        support_embeddings = self.embedding(support_set)
-        query_embeddings = self.embedding(query_set)
+        # Logika minimal agar Keras bisa mengonstruksi ulang model
+        return self.embedding(query_set)
 
-        # Logika Prototype 
-        prototypes = []
-        for i in range(n_way):
-            mask = tf.equal(support_labels, i)
-            class_embeddings = tf.boolean_mask(support_embeddings, mask)
-            prototype = tf.reduce_mean(class_embeddings, axis=0)
-            prototypes.append(prototype)
-        prototypes = tf.stack(prototypes)
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "embedding_model": tf.keras.layers.serialize(self.embedding)
+        })
+        return config
 
-        distances = []
-        for q in query_embeddings:
-            dist = tf.norm(prototypes - q, axis=1)
-            distances.append(dist)
-        
-        return -tf.stack(distances)
-
-# ==========================================
-# 2. FUNGSI EKSTRAKSI FITUR (Sesuai Skripsi)
-# ==========================================
-def extract_combined_features(file_path, usia, gender, provinsi, scaler_usia, ohe):
-    # Ekstraksi MFCC [cite: 1]
-    y, sr = librosa.load(file_path, sr=22050)
-    y = librosa.util.normalize(y)
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40, n_fft=2048, hop_length=512)
-    delta = librosa.feature.delta(mfcc)
-    delta2 = librosa.feature.delta(mfcc, order=2)
-
-    # Padding panjang 174 [cite: 1]
-    max_len = 174
-    if mfcc.shape[1] < max_len:
-        pad_width = max_len - mfcc.shape[1]
-        mfcc = np.pad(mfcc, ((0, 0), (0, pad_width)), mode='constant')
-        delta = np.pad(delta, ((0, 0), (0, pad_width)), mode='constant')
-        delta2 = np.pad(delta2, ((0, 0), (0, pad_width)), mode='constant')
-    else:
-        mfcc, delta, delta2 = mfcc[:, :max_len], delta[:, :max_len], delta2[:, :max_len]
-    
-    audio_feat = np.stack([mfcc, delta, delta2], axis=-1)
-
-    # Proses Metadata [cite: 1]
-    u_scaled = scaler_usia.transform([[usia]])
-    c_enc = ohe.transform([[gender, provinsi]])
-    meta = np.hstack([u_scaled, c_enc]).astype(np.float32)
-    
-    # Broadcast meta ke 11 channel [cite: 1]
-    meta_b = np.repeat(meta[:, np.newaxis, np.newaxis, :], 40, axis=1)
-    meta_b = np.repeat(meta_b, 174, axis=2)
-    
-    return np.concatenate([audio_feat[np.newaxis, ...], meta_b], axis=-1).astype(np.float32)
-
-# ==========================================
-# 3. LOAD RESOURCE
-# ==========================================
+# ==========================================================
+# 2. FUNGSI LOAD MODEL (PERBAIKAN ERROR 'STR')
+# ==========================================================
 @st.cache_resource
-def load_all():
-    model = tf.keras.models.load_model("model_aksen.keras", 
-                                       custom_objects={"PrototypicalNetwork": PrototypicalNetwork})
-    df = pd.read_csv("metadata.csv")
-    return model, df
+def load_accent_model():
+    model_path = "model_aksen.keras"
+    if os.path.exists(model_path):
+        # Menyertakan custom_objects agar PrototypicalNetwork dikenali
+        custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+        return model
+    else:
+        st.error(f"File {model_path} tidak ditemukan!")
+        return None
 
-# ==========================================
-# 4. TAMPILAN UI
-# ==========================================
-st.set_page_config(page_title="Deteksi Aksen Prototypical", layout="wide")
+# Load model secara global
+model_aksen = load_accent_model()
 
-model, df_meta = load_all()
+# ==========================================================
+# 3. FUNGSI PEMROSESAN AUDIO
+# ==========================================================
+def load_metadata(csv_path):
+    if os.path.exists(csv_path):
+        return pd.read_csv(csv_path)
+    return pd.DataFrame()
 
-if model and df_meta:
-    # Persiapkan Encoder & Scaler [cite: 1]
-    le_y = LabelEncoder().fit(df_meta['label_aksen'])
-    scaler_u = StandardScaler().fit(df_meta['usia'].values.reshape(-1, 1))
-    ohe_m = OneHotEncoder(handle_unknown="ignore", sparse_output=False).fit(df_meta[['gender', 'provinsi']])
+def predict_accent(audio_path, model):
+    if model is None:
+        return "Model tidak terload"
 
-    st.title("🎤 Sistem Deteksi Aksen Otomatis")
-    
+    # Ekstraksi Fitur (Sesuaikan dengan durasi/shape saat training)
+    y, sr = librosa.load(audio_path, sr=None)
+    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+
+    # Preprocessing: Sesuaikan shape mfcc agar sesuai input model (n_samples, n_mfcc, time)
+    # Ini hanya contoh, sesuaikan dengan bentuk input model skripsi kamu
+    mfcc_resized = np.mean(mfcc.T, axis=0)
+    input_data = np.expand_dims(mfcc_resized, axis=0)
+
+    # Prediksi menggunakan model (Bukan string lagi)
+    aksen_probs = model.predict(input_data)
+
+    # Contoh mapping label (Sesuaikan dengan urutan label skripsi kamu)
+    aksen_classes = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
+    predicted_idx = np.argmax(aksen_probs)
+    return aksen_classes[predicted_idx]
+
+# ==========================================================
+# 4. MAIN APP
+# ==========================================================
+def main():
+    st.set_page_config(page_title="Deteksi Aksen Prototypical", layout="wide")
+
+    if 'prediction_made' not in st.session_state:
+        st.session_state.prediction_made = False
+
     with st.sidebar:
-        st.header("Settings")
-        st.radio("Select Mode:", ["Upload Audio"], index=0)
+        st.header("⚙️ Settings")
+        demo_mode = st.radio("Select Mode:", ["Upload Audio"])
 
-    uploaded_file = st.file_uploader("Upload file audio (.wav)", type=["wav"])
+    col1, col2 = st.columns([2, 1])
 
-    if uploaded_file:
-        st.audio(uploaded_file)
-        
-        # Auto-lookup Metadata berdasarkan nama file
-        user_row = df_meta[df_meta['file_name'] == uploaded_file.name]
+    with col1:
+        st.header("🎵 Audio Input")
+        audio_file = st.file_uploader("Upload file audio (.wav, .mp3)", type=["wav", "mp3"])
 
-        if not user_row.empty:
-            u_val, g_val, p_val = user_row.iloc[0]['usia'], user_row.iloc[0]['gender'], user_row.iloc[0]['provinsi']
+    if audio_file is not None:
+        st.divider()
+        st.audio(audio_file, format="audio/wav")
 
-            st.success(f"✅ Data ditemukan: {uploaded_file.name}")
-            st.subheader("Informasi Pembicara:")
-            col1, col2, col3 = st.columns(3)
-            col1.write(f"📅 **Usia:** {u_val}")
-            col2.write(f"👤 **Gender:** {g_val}")
-            col3.write(f"📍 **Provinsi:** {p_val}")
+        if st.button("🚀 Extract Features and Detect", type="primary"):
+            with st.spinner("Processing audio..."):
+                try:
+                    # Simpan audio sementara
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                        tmp_file.write(audio_file.getbuffer())
+                        tmp_path = tmp_file.name
 
-            if st.button("🚀 Extract Features and Detect"):
-                with st.spinner("Sedang memproses..."):
-                    with open("query.wav", "wb") as f: f.write(uploaded_file.getbuffer())
-                    
-                    # 1. Ekstrak Query
-                    query_final = extract_combined_features("query.wav", u_val, g_val, p_val, scaler_u, ohe_m)
-                    
-                    # 2. Siapkan Support Set (Referensial) 
-                    support_set, support_labels = [], []
-                    accents = df_meta['label_aksen'].unique()
-                    
-                    for idx, acc in enumerate(accents):
-                        s_row = df_meta[df_meta['label_aksen'] == acc].iloc[0]
-                        # Audio referensi harus ada di folder GitHub
-                        if os.path.exists(s_row['file_name']):
-                            s_feat = extract_combined_features(s_row['file_name'], s_row['usia'], 
-                                                               s_row['gender'], s_row['provinsi'], 
-                                                               scaler_u, ohe_m)
-                            support_set.append(s_feat[0])
-                            support_labels.append(idx)
-                    
-                    # 3. Jalankan Prediksi FSL 
-                    if len(support_set) > 0:
-                        logits = model.call(np.array(support_set), query_final, 
-                                            np.array(support_labels), len(accents))
-                        pred_idx = np.argmax(logits[0])
-                        hasil = le_y.inverse_transform([pred_idx])[0]
-                        st.markdown(f"### Hasil Deteksi Aksen: **{hasil}**")
-                    else:
-                        st.error("Gagal menyiapkan Support Set. Pastikan folder audio ada di GitHub!")
-        else:
-            st.error(f"File '{uploaded_file.name}' tidak ditemukan di metadata.csv!")
+                    # Metadata handling
+                    metadata = load_metadata("metadata.csv")
+                    file_name = audio_file.name
+                    metadata_info = metadata[metadata['file_name'] == file_name] if not metadata.empty else pd.DataFrame()
+
+                    if not metadata_info.empty:
+                        usia = metadata_info['usia'].values[0]
+                        gender = metadata_info['gender'].values[0]
+                        provinsi = metadata_info['provinsi'].values[0]
+
+                        st.subheader("Informasi Pembicara:")
+                        st.write(f"📅Usia: {usia}")
+                        st.write(f"🗣️Gender: {gender}")
+                        st.write(f"📍Provinsi: {provinsi}")
+
+                    # PROSES PREDIKSI
+                    # Melewatkan objek model_aksen (bukan string) ke fungsi
+                    hasil_aksen = predict_accent(tmp_path, model_aksen)
+
+                    st.success(f"### 🎭 Deteksi Aksen: {hasil_aksen}")
+
+                    # Hapus file sementara
+                    os.unlink(tmp_path)
+
+                except Exception as e:
+                    st.error(f"Error during processing: {str(e)}")
+
+if __name__ == "__main__":
+    main()
