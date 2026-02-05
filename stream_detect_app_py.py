@@ -11,17 +11,22 @@ from tensorflow.keras.models import load_model
 # 1. DEFINISI CLASS PROTOTYPICAL NETWORK (WAJIB ADA)
 # Pastikan kode di dalam class ini persis sama dengan di Colab kamu
 # ==========================================================
+@tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
-    def __init__(self, encoder, **kwargs):
+    def __init__(self, embedding_model=None, **kwargs):
         super(PrototypicalNetwork, self).__init__(**kwargs)
-        self.encoder = encoder
+        self.embedding = embedding_model
 
-    def call(self, inputs):
-        return self.encoder(inputs)
+    def call(self, support_set, query_set, support_labels, n_way):
+        # Logika minimal agar Keras bisa mengonstruksi ulang model
+        return self.embedding(query_set)
 
-    # Tambahkan metode predict jika kamu mendefinisikannya secara custom di Colab
-    def predict(self, x):
-        return self.encoder.predict(x)
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "embedding_model": tf.keras.layers.serialize(self.embedding)
+        })
+        return config
 
 # ==========================================================
 # 2. FUNGSI LOAD MODEL (PERBAIKAN ERROR 'STR')
