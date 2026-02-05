@@ -112,9 +112,9 @@ def main():
                         provinsi = metadata_info['provinsi'].values[0]
 
                         st.subheader("Informasi Pembicara:")
-                        st.write(f"📅Usia: {usia}")
-                        st.write(f"🗣️Gender: {gender}")
-                        st.write(f"📍Provinsi: {provinsi}")
+                        st.write(f"📅Usia: {usia}")</h2>", unsafe_allow_html=True)
+                        st.write(f"🗣️Gender: {gender}"){gender}</h2>", unsafe_allow_html=True)
+                        st.write(f"📍Provinsi: {provinsi}"){provinsi}</h2>", unsafe_allow_html=True)
 
                     # PROSES PREDIKSI
                     # Melewatkan objek model_aksen (bukan string) ke fungsi
