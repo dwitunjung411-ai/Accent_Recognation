@@ -32,7 +32,7 @@ def load_accent_model():
     if os.path.exists(model_path):
         # Menyertakan custom_objects agar PrototypicalNetwork dikenali
         custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
-        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+        model = tf.keras.models.load_model("model_aksen.keras", custom_objects=custom_objects)
         return model
     else:
         st.error(f"File {model_path} tidak ditemukan!")
