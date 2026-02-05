@@ -18,10 +18,26 @@ class PrototypicalNetwork(tf.keras.Model):
         self.embedding = embedding_model
 
     def call(self, support_set, query_set, support_labels, n_way):
-        # Logika minimal agar Keras bisa mengonstruksi ulang model
-        return self.embedding(query_set)
+        # Hitung embedding untuk support dan query
+        support_embeddings = self.embedding(support_set)
+        query_embeddings = self.embedding(query_set)
 
-    def get_config(self):
+        # Hitung prototype per kelas
+        prototypes = []
+        for i in range(n_way):
+            mask = tf.equal(support_labels, i)
+            class_embeddings = tf.boolean_mask(support_embeddings, mask)
+            prototype = tf.reduce_mean(class_embeddings, axis=0)
+            prototypes.append(prototype)
+        prototypes = tf.stack(prototypes)
+
+        # Hitung jarak Euclidean (Logits)
+        distances = []
+        for q in query_embeddings:
+            dist = tf.norm(prototypes - q, axis=1)
+            distances.append(dist)
+        
+        return -tf.stack(distances) # Mengembalikan negative distances sebagai logits    def get_config(self):
         config = super().get_config()
         config.update({
             "embedding_model": tf.keras.layers.serialize(self.embedding)
