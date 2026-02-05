@@ -118,7 +118,7 @@ def main():
         st.divider()
         st.audio(audio_file, format="audio/wav")
 
-        if st.button("🚀 Extract Features and Predict", type="primary"):
+        if st.button("🚀 Extract Features and Detect", type="primary"):
             with st.spinner("Processing audio..."):
                 try:
                     # Simpan audio sementara
@@ -145,7 +145,7 @@ def main():
                     # Melewatkan objek model_aksen (bukan string) ke fungsi
                     hasil_aksen = predict_accent(tmp_path, model_aksen)
 
-                    st.success(f"### 🎭 Predikisi Aksen: {hasil_aksen}")
+                    st.success(f"### 🎭 Deteksi Aksen: {hasil_aksen}")
 
                     # Hapus file sementara
                     os.unlink(tmp_path)
