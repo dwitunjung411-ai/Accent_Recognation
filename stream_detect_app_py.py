@@ -33,7 +33,7 @@ class PrototypicalNetwork(tf.keras.Model):
 # ==========================================================
 @st.cache_resource
 def load_accent_model():
-    model_path = "model_aksen.keras" # Pastikan nama ini SAMA dengan di GitHub
+    model_path = "model_detect_aksen.keras"
     if os.path.exists(model_path):
         try:
             # Gunakan penamaan yang sesuai dengan metadata model Anda
