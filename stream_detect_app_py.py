@@ -1,91 +1,143 @@
 import streamlit as st
-import tensorflow as tf
-from tensorflow.keras.models import load_model
 import numpy as np
-import os
+import librosa
+import tensorflow as tf
 import tempfile
+import os
 
-# ==========================================================
-# 1. DEFINISI CLASS PROTOTYPICAL NETWORK
-# ==========================================================
+# ===============================
+# CONFIG
+# ===============================
+N_WAY = 5
+SR = 22050
+
+st.set_page_config(
+    page_title="Deteksi Aksen - Few Shot",
+    layout="centered"
+)
+
+# ===============================
+# MODEL DEFINITION (HARUS SAMA)
+# ===============================
+@tf.keras.utils.register_keras_serializable()
 class PrototypicalNetwork(tf.keras.Model):
-    def __init__(self, encoder, **kwargs):
-        super(PrototypicalNetwork, self).__init__(**kwargs)
-        self.encoder = encoder
+    def __init__(self, embedding_model=None, **kwargs):
+        super().__init__(**kwargs)
+        self.embedding = embedding_model
 
-    # PINDAHKAN @tf.function ke sini (di atas method call)
-    @tf.function(reduce_retracing=True)
-    def call(self, inputs):
-        return self.encoder(inputs)
+    def call(self, support_set, query_set, support_labels, n_way):
+        support_emb = self.embedding(support_set)
+        query_emb = self.embedding(query_set)
 
-    def predict(self, x):
-        return self.encoder.predict(x)
+        prototypes = []
+        for i in range(n_way):
+            mask = tf.equal(support_labels, i)
+            class_emb = tf.boolean_mask(support_emb, mask)
+            proto = tf.reduce_mean(class_emb, axis=0)
+            prototypes.append(proto)
 
-# ==========================================================
-# 2. FUNGSI LOAD MODEL DENGAN CACHE
-# ==========================================================
+        prototypes = tf.stack(prototypes)
+
+        distances = tf.norm(
+            tf.expand_dims(query_emb, 1) - tf.expand_dims(prototypes, 0),
+            axis=2
+        )
+
+        return -distances  # logits
+
+# ===============================
+# LOAD MODEL & SUPPORT SET
+# ===============================
 @st.cache_resource
-def load_accent_model():
-    model_path = "model_aksen.keras"
-    if os.path.exists(model_path):
-        try:
-            # Muat model dasar (encoder)
-            base_model = load_model(model_path, compile=False)
-            # Bungkus ke dalam class PrototypicalNetwork
-            model = PrototypicalNetwork(encoder=base_model)
-            return model
-        except Exception as e:
-            st.error(f"Gagal memuat model: {e}")
-            return None
+def load_all():
+    model = tf.keras.models.load_model(
+        "model_aksen.keras",
+        custom_objects={"PrototypicalNetwork": PrototypicalNetwork}
+    )
+
+    support_set = np.load("support_set.npy")
+    support_labels = np.load("support_labels.npy")
+
+    return model, support_set, support_labels
+
+model, support_set, support_labels = load_all()
+
+# ===============================
+# FEATURE EXTRACTION (SAMA DENGAN TRAINING)
+# ===============================
+def extract_mfcc(audio_path, sr=22050, n_mfcc=40, max_len=174):
+    y, sr = librosa.load(audio_path, sr=sr)
+    y = librosa.util.normalize(y)
+
+    mfcc = librosa.feature.mfcc(
+        y=y,
+        sr=sr,
+        n_mfcc=n_mfcc,
+        n_fft=2048,
+        hop_length=512
+    )
+
+    if mfcc.shape[1] < max_len:
+        pad = max_len - mfcc.shape[1]
+        mfcc = np.pad(mfcc, ((0,0),(0,pad)), mode="constant")
     else:
-        st.error(f"File model '{model_path}' tidak ditemukan di repository!")
-        return None
+        mfcc = mfcc[:, :max_len]
 
-# ==========================================================
-# 3. INTERFACE UTAMA
-# ==========================================================
-def main():
-    st.set_page_config(page_title="Deteksi Aksen & Karakteristik Suara", layout="wide")
-    
-    # Sidebar
-    st.sidebar.title("⚙️ Settings")
-    mode = st.sidebar.radio("Select Mode:", ["Upload Audio"])
-    
-    # Load Model
-    model = load_accent_model()
+    mfcc = mfcc[..., np.newaxis]  # (40,174,1)
+    return mfcc.astype(np.float32)
 
-    if mode == "Upload Audio":
-        st.subheader("🎵 Analisis Audio")
-        uploaded_file = st.file_uploader("Upload file audio (wav/mp3)", type=["wav", "mp3"])
-        
-        if uploaded_file is not None:
-            st.audio(uploaded_file)
-            
-            if st.button("Mulai Deteksi"):
-                if model is not None:
-                    with st.spinner('Sedang memproses...'):
-                        try:
-                            # --- PREPROCESSING (Pastikan ini sesuai dengan Librosa kamu) ---
-                            # Dummy input sesuai shape di error (1, 13)
-                            input_features = np.random.rand(1, 13).astype(np.float32)
-                            
-                            # Melakukan Prediksi
-                            # Gunakan model.predict untuk menghindari masalah symbolic tensor di Streamlit
-                            predictions = model.predict(input_features)
-                            
-                            # --- TAMPILAN HASIL ---
-                            st.success("Analisis Berhasil!")
-                            
-                            # Contoh menampilkan data (sesuaikan dengan output asli model skripsi kamu)
-                            res_col1, res_col2, res_col3 = st.columns(3)
-                            res_col1.metric("📅 Usia", "70") # Contoh statis sesuai gambar
-                            res_col2.metric("👤 Gender", "Perempuan")
-                            res_col3.metric("📍 Provinsi", "DKI Jakarta")
-                            
-                        except Exception as e:
-                            st.error(f"Terjadi kesalahan saat inferensi: {e}")
-                else:
-                    st.error("Model belum dimuat dengan benar.")
+# ===============================
+# STREAMLIT UI
+# ===============================
+st.title("🎙️ Deteksi Aksen Bahasa (Few-Shot Learning)")
+st.write("Model Prototypical Network")
 
-if __name__ == "__main__":
-    main()
+audio_file = st.file_uploader(
+    "Upload audio (.wav / .mp3)",
+    type=["wav", "mp3"]
+)
+
+if audio_file:
+    st.audio(audio_file)
+
+    if st.button("🚀 Deteksi Aksen"):
+        with st.spinner("Memproses audio..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(audio_file.read())
+                audio_path = tmp.name
+
+            # QUERY FEATURE
+            query_feat = extract_mfcc(audio_path)
+            query_feat = query_feat[np.newaxis, ...]  # (1,H,W,C)
+
+            # CONVERT TO TENSOR
+            support_tensor = tf.convert_to_tensor(support_set, tf.float32)
+            query_tensor = tf.convert_to_tensor(query_feat, tf.float32)
+            support_labels_tensor = tf.convert_to_tensor(support_labels, tf.int32)
+
+            # MODEL CALL (INI KUNCI)
+            logits = model.call(
+                support_tensor,
+                query_tensor,
+                support_labels_tensor,
+                N_WAY
+            )
+
+            probs = tf.nn.softmax(logits, axis=1).numpy()[0]
+            pred_idx = np.argmax(probs)
+
+            aksen_classes = [
+                "Sunda",
+                "Jawa Tengah",
+                "Jawa Timur",
+                "Yogyakarta",
+                "Betawi"
+            ]
+
+            st.success(f"🎭 **Aksen Terdeteksi: {aksen_classes[pred_idx]}**")
+
+            st.write("Probabilitas:")
+            for i, cls in enumerate(aksen_classes):
+                st.write(f"{cls}: {probs[i]*100:.2f}%")
+
+            os.unlink(audio_path)
