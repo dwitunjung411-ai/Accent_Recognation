@@ -19,6 +19,8 @@ st.set_page_config(
 # ===============================
 # MODEL DEFINITION (HARUS SAMA)
 # ===============================
+tf.config.run_functions_eagerly(True)
+tf.data.experimental.enable_debug_mode()
 @tf.keras.utils.register_keras_serializable()
 class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, embedding_model=None, **kwargs):
