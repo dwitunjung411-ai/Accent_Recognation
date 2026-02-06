@@ -11,6 +11,7 @@ from tensorflow.keras.models import load_model
 # 1. DEFINISI CLASS PROTOTYPICAL NETWORK (WAJIB ADA)
 # Pastikan kode di dalam class ini persis sama dengan di Colab kamu
 # ==========================================================
+@tf.function
 class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, encoder, **kwargs):
         super(PrototypicalNetwork, self).__init__(**kwargs)
