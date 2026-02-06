@@ -17,55 +17,49 @@ st.set_page_config(
 )
 
 # ===============================
-# MODEL DEFINITION (HARUS SAMA)
+# MODEL DEFINITION
 # ===============================
-tf.config.run_functions_eagerly(True)
-tf.data.experimental.enable_debug_mode()
 @tf.keras.utils.register_keras_serializable()
 class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, embedding_model=None, **kwargs):
         super().__init__(**kwargs)
         self.embedding = embedding_model
 
-    def call(self, support_set, query_set, support_labels, n_way):
-        support_emb = self.embedding(support_set)
-        query_emb = self.embedding(query_set)
-
-        prototypes = []
-        for i in range(n_way):
-            mask = tf.equal(support_labels, i)
-            class_emb = tf.boolean_mask(support_emb, mask)
-            proto = tf.reduce_mean(class_emb, axis=0)
-            prototypes.append(proto)
-
-        prototypes = tf.stack(prototypes)
-
-        distances = tf.norm(
-            tf.expand_dims(query_emb, 1) - tf.expand_dims(prototypes, 0),
-            axis=2
-        )
-
-        return -distances  # logits
+    def call(self, inputs, training=False):
+        # Jika model hanya menerima query set saja
+        return self.embedding(inputs)
 
 # ===============================
 # LOAD MODEL & SUPPORT SET
 # ===============================
 @st.cache_resource
 def load_all():
-    model = tf.keras.models.load_model(
-        "model_aksen.keras",
-        custom_objects={"PrototypicalNetwork": PrototypicalNetwork}
-    )
-
-    support_set = np.load("support_set.npy")
-    support_labels = np.load("support_labels.npy")
-
+    try:
+        model = tf.keras.models.load_model(
+            "model_aksen.keras",
+            custom_objects={"PrototypicalNetwork": PrototypicalNetwork}
+        )
+        print("✅ Model loaded successfully")
+        print(f"Model type: {type(model)}")
+    except Exception as e:
+        st.error(f"Error loading model: {e}")
+        return None, None, None
+    
+    try:
+        support_set = np.load("support_set.npy")
+        support_labels = np.load("support_labels.npy")
+        print(f"✅ Support set loaded: {support_set.shape}")
+        print(f"✅ Support labels: {support_labels.shape}")
+    except Exception as e:
+        st.error(f"Error loading support set: {e}")
+        return model, None, None
+    
     return model, support_set, support_labels
 
 model, support_set, support_labels = load_all()
 
 # ===============================
-# FEATURE EXTRACTION (SAMA DENGAN TRAINING)
+# FEATURE EXTRACTION
 # ===============================
 def extract_mfcc(audio_path, sr=22050, n_mfcc=40, max_len=174):
     y, sr = librosa.load(audio_path, sr=sr)
@@ -89,10 +83,37 @@ def extract_mfcc(audio_path, sr=22050, n_mfcc=40, max_len=174):
     return mfcc.astype(np.float32)
 
 # ===============================
+# PROTOTYPE COMPUTATION
+# ===============================
+def compute_prototypes(model, support_set, support_labels, n_way):
+    """Hitung prototipe dari support set menggunakan model embedding"""
+    support_emb = model.predict(support_set, verbose=0)
+    
+    prototypes = []
+    for i in range(n_way):
+        mask = support_labels == i
+        class_emb = support_emb[mask]
+        proto = np.mean(class_emb, axis=0)
+        prototypes.append(proto)
+    
+    return np.array(prototypes)
+
+# ===============================
 # STREAMLIT UI
 # ===============================
 st.title("🎙️ Deteksi Aksen Bahasa (Few-Shot Learning)")
 st.write("Model Prototypical Network")
+
+if model is None or support_set is None:
+    st.error("❌ Gagal memuat model atau data support set.")
+    st.stop()
+
+# Hitung prototipe sekali saja saat aplikasi dimulai
+@st.cache_data
+def get_prototypes():
+    return compute_prototypes(model, support_set, support_labels, N_WAY)
+
+prototypes = get_prototypes()
 
 audio_file = st.file_uploader(
     "Upload audio (.wav / .mp3)",
@@ -110,21 +131,18 @@ if audio_file:
 
             # QUERY FEATURE
             query_feat = extract_mfcc(audio_path)
-            query_feat = query_feat[np.newaxis, ...]  # (1,H,W,C)
-
-            # CONVERT TO TENSOR
-            support_tensor = tf.convert_to_tensor(support_set, tf.float32)
-            query_tensor = tf.convert_to_tensor(query_feat, tf.float32)
-            support_labels_tensor = tf.convert_to_tensor(support_labels, tf.int32)
-
-            # MODEL CALL (INI KUNCI)
-            logits = model.call(
-                support_tensor,
-                query_tensor,
-                support_labels_tensor,
-                N_WAY
+            query_feat = query_feat[np.newaxis, ...]  # (1,40,174,1)
+            
+            # DAPATKAN EMBEDDING QUERY
+            query_emb = model.predict(query_feat, verbose=0)
+            
+            # HITUNG JARAK KE PROTOTIPE
+            distances = np.linalg.norm(
+                query_emb[:, np.newaxis, :] - prototypes[np.newaxis, :, :],
+                axis=2
             )
-
+            
+            logits = -distances
             probs = tf.nn.softmax(logits, axis=1).numpy()[0]
             pred_idx = np.argmax(probs)
 
@@ -137,9 +155,15 @@ if audio_file:
             ]
 
             st.success(f"🎭 **Aksen Terdeteksi: {aksen_classes[pred_idx]}**")
-
             st.write("Probabilitas:")
+            
             for i, cls in enumerate(aksen_classes):
-                st.write(f"{cls}: {probs[i]*100:.2f}%")
+                col1, col2, col3 = st.columns([2, 5, 2])
+                with col1:
+                    st.write(f"{cls}")
+                with col2:
+                    st.progress(float(probs[i]))
+                with col3:
+                    st.write(f"{probs[i]*100:.2f}%")
 
             os.unlink(audio_path)
