@@ -80,7 +80,6 @@ def main():
     df_metadata = load_metadata_df()
 
     st.title("🎙️ Accent Recognation")
-    st.write("Aplikasi pendeteksi aksen daerah berbasis Prototypical Network.")
     st.divider()
 
     with st.sidebar:
@@ -99,7 +98,7 @@ def main():
         
         if audio_file:
             st.audio(audio_file)
-            if st.button("🚀 Detect Now!", type="primary", use_container_width=True):
+            if st.button("🚀 Extract Feature and  Detect", type="primary", use_container_width=True):
                 if model_aksen:
                     with st.spinner("Sedang memproses..."):
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
@@ -122,11 +121,11 @@ def main():
                             st.info(f"### Aksen Terdeteksi: **{hasil_aksen}**")
                             
                             st.write("---")
-                            st.subheader("👤 Profil Pembicara")
+                            st.subheader("🔹Info Pembicara")
                             if user_info:
-                                st.write(f"🔹 **Usia:** {user_info.get('usia', '-')}")
-                                st.write(f"🔹 **Gender:** {user_info.get('gender', '-')}")
-                                st.write(f"🔹 **Provinsi:** {user_info.get('provinsi', '-')}")
+                                st.write(f"📅Usia: {user_info.get('usia', '-')}")
+                                st.write(f"🗣️Gender: {user_info.get('gender', '-')}")
+                                st.write(f"📍Provinsi: {user_info.get('provinsi', '-')}")
                             else:
                                 st.warning("Data file ini tidak terdaftar di metadata.csv")
                         
