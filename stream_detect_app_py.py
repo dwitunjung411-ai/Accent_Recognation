@@ -1,149 +1,143 @@
 import streamlit as st
-import tensorflow as tf
 import numpy as np
 import librosa
+import tensorflow as tf
+import tempfile
 import os
-from tensorflow.keras.models import load_model
 
-# ==========================================================
-# 1. FIX SYMBOLIC TENSOR ERROR
-# ==========================================================
-tf.config.run_functions_eagerly(True)
+# ===============================
+# CONFIG
+# ===============================
+N_WAY = 5
+SR = 22050
 
-@tf.keras.utils.register_keras_serializable(package="Custom")
+st.set_page_config(
+    page_title="Deteksi Aksen - Few Shot",
+    layout="centered"
+)
+
+# ===============================
+# MODEL DEFINITION (HARUS SAMA)
+# ===============================
+@tf.keras.utils.register_keras_serializable()
 class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, embedding_model=None, **kwargs):
-        super(PrototypicalNetwork, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.embedding = embedding_model
 
-    @tf.function
-    def call(self, support_set=None, query_set=None, support_labels=None, n_way=None, training=False):
-        # Logika fleksibel: Jika hanya query_set yang dikirim (saat prediksi)
-        # atau jika data dikirim sebagai argumen pertama (default Keras)
-        if query_set is not None:
-            return self.embedding(query_set)
-        return self.embedding(support_set)
+    def call(self, support_set, query_set, support_labels, n_way):
+        support_emb = self.embedding(support_set)
+        query_emb = self.embedding(query_set)
 
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            "embedding_model": tf.keras.layers.serialize(self.embedding)
-        })
-        return config
+        prototypes = []
+        for i in range(n_way):
+            mask = tf.equal(support_labels, i)
+            class_emb = tf.boolean_mask(support_emb, mask)
+            proto = tf.reduce_mean(class_emb, axis=0)
+            prototypes.append(proto)
 
-# ==========================================================
-# 2. FIX FILENOTFOUND ERROR & LOAD DATA
-# ==========================================================
+        prototypes = tf.stack(prototypes)
+
+        distances = tf.norm(
+            tf.expand_dims(query_emb, 1) - tf.expand_dims(prototypes, 0),
+            axis=2
+        )
+
+        return -distances  # logits
+
+# ===============================
+# LOAD MODEL & SUPPORT SET
+# ===============================
 @st.cache_resource
 def load_all():
-    model_path = "model_aksen.h5" # Sesuaikan nama file modelmu
-    support_path = "support_set.npy"
-    label_path = "support_labels.npy"
+    model = tf.keras.models.load_model(
+        "model_aksen.keras",
+        custom_objects={"PrototypicalNetwork": PrototypicalNetwork}
+    )
 
-    # Cek apakah file ada sebelum di-load
-    if not os.path.exists(support_path):
-        st.error(f"⚠️ File {support_path} tidak ditemukan! Pastikan sudah di-upload ke GitHub.")
-        return None, None, None
+    support_set = np.load("support_set.npy")
+    support_labels = np.load("support_labels.npy")
 
-    model = load_model(model_path, custom_objects={'PrototypicalNetwork': PrototypicalNetwork}, compile=False)
-    support_set = np.load(support_path)
-    support_labels = np.load(label_path)
-    
     return model, support_set, support_labels
 
-# ==========================================================
-# 3. RUN APP
-# ==========================================================
-st.title("Deteksi Aksen Suara")
-
-# Panggil fungsi load_all dengan aman
 model, support_set, support_labels = load_all()
 
-if model is not None:
-    uploaded_file = st.file_uploader("Pilih file audio...", type=["wav", "mp3"])
-    
-    if uploaded_file is not None:
-        # Tambahkan bagian Feature Extraction kamu di sini (MFCC)
-        # ...
-        
-        # Saat melakukan prediksi:
-        # prediction = model(input_mfcc) 
-        st.success("Model dan Support Set berhasil dimuat!")
+# ===============================
+# FEATURE EXTRACTION (SAMA DENGAN TRAINING)
+# ===============================
+def extract_mfcc(audio_path, sr=22050, n_mfcc=40, max_len=174):
+    y, sr = librosa.load(audio_path, sr=sr)
+    y = librosa.util.normalize(y)
 
-    # Ekstraksi Fitur (Sesuaikan dengan durasi/shape saat training)
-    y, sr = librosa.load(audio_path, sr=None)
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+    mfcc = librosa.feature.mfcc(
+        y=y,
+        sr=sr,
+        n_mfcc=n_mfcc,
+        n_fft=2048,
+        hop_length=512
+    )
 
-    # Preprocessing: Sesuaikan shape mfcc agar sesuai input model (n_samples, n_mfcc, time)
-    # Ini hanya contoh, sesuaikan dengan bentuk input model skripsi kamu
-    mfcc_resized = np.mean(mfcc.T, axis=0)
-    input_data = np.expand_dims(mfcc_resized, axis=0)
+    if mfcc.shape[1] < max_len:
+        pad = max_len - mfcc.shape[1]
+        mfcc = np.pad(mfcc, ((0,0),(0,pad)), mode="constant")
+    else:
+        mfcc = mfcc[:, :max_len]
 
-    # Prediksi menggunakan model (Bukan string lagi)
-    aksen_probs = model.predict(input_data)
+    mfcc = mfcc[..., np.newaxis]  # (40,174,1)
+    return mfcc.astype(np.float32)
 
-    # Contoh mapping label (Sesuaikan dengan urutan label skripsi kamu)
-    aksen_classes = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
-    predicted_idx = np.argmax(aksen_probs)
-    return aksen_classes[predicted_idx]
+# ===============================
+# STREAMLIT UI
+# ===============================
+st.title("🎙️ Deteksi Aksen Bahasa (Few-Shot Learning)")
+st.write("Model Prototypical Network")
 
-# ==========================================================
-# 4. MAIN APP
-# ==========================================================
-def main():
-    st.set_page_config(page_title="Deteksi Aksen Prototypical", layout="wide")
+audio_file = st.file_uploader(
+    "Upload audio (.wav / .mp3)",
+    type=["wav", "mp3"]
+)
 
-    if 'prediction_made' not in st.session_state:
-        st.session_state.prediction_made = False
+if audio_file:
+    st.audio(audio_file)
 
-    with st.sidebar:
-        st.header("⚙️ Settings")
-        demo_mode = st.radio("Select Mode:", ["Upload Audio"])
+    if st.button("🚀 Deteksi Aksen"):
+        with st.spinner("Memproses audio..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(audio_file.read())
+                audio_path = tmp.name
 
-    col1, col2 = st.columns([2, 1])
+            # QUERY FEATURE
+            query_feat = extract_mfcc(audio_path)
+            query_feat = query_feat[np.newaxis, ...]  # (1,H,W,C)
 
-    with col1:
-        st.header("🎵 Audio Input")
-        audio_file = st.file_uploader("Upload file audio (.wav, .mp3)", type=["wav", "mp3"])
+            # CONVERT TO TENSOR
+            support_tensor = tf.convert_to_tensor(support_set, tf.float32)
+            query_tensor = tf.convert_to_tensor(query_feat, tf.float32)
+            support_labels_tensor = tf.convert_to_tensor(support_labels, tf.int32)
 
-    if audio_file is not None:
-        st.divider()
-        st.audio(audio_file, format="audio/wav")
+            # MODEL CALL (INI KUNCI)
+            logits = model.call(
+                support_tensor,
+                query_tensor,
+                support_labels_tensor,
+                N_WAY
+            )
 
-        if st.button("🚀 Extract Features and Detect", type="primary"):
-            with st.spinner("Processing audio..."):
-                try:
-                    # Simpan audio sementara
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-                        tmp_file.write(audio_file.getbuffer())
-                        tmp_path = tmp_file.name
+            probs = tf.nn.softmax(logits, axis=1).numpy()[0]
+            pred_idx = np.argmax(probs)
 
-                    # Metadata handling
-                    metadata = load_metadata("metadata.csv")
-                    file_name = audio_file.name
-                    metadata_info = metadata[metadata['file_name'] == file_name] if not metadata.empty else pd.DataFrame()
+            aksen_classes = [
+                "Sunda",
+                "Jawa Tengah",
+                "Jawa Timur",
+                "Yogyakarta",
+                "Betawi"
+            ]
 
-                    if not metadata_info.empty:
-                        usia = metadata_info['usia'].values[0]
-                        gender = metadata_info['gender'].values[0]
-                        provinsi = metadata_info['provinsi'].values[0]
+            st.success(f"🎭 **Aksen Terdeteksi: {aksen_classes[pred_idx]}**")
 
-                        st.subheader("Informasi Pembicara:")
-                        st.write(f"📅Usia: {usia}")
-                        st.write(f"🗣️Gender: {gender}")
-                        st.write(f"📍Provinsi: {provinsi}")
+            st.write("Probabilitas:")
+            for i, cls in enumerate(aksen_classes):
+                st.write(f"{cls}: {probs[i]*100:.2f}%")
 
-                    # PROSES PREDIKSI
-                    # Melewatkan objek model_aksen (bukan string) ke fungsi
-                    hasil_aksen = predict_accent(tmp_path, model_aksen)
-
-                    st.success(f"### 🎭 Deteksi Aksen: {hasil_aksen}")
-
-                    # Hapus file sementara
-                    os.unlink(tmp_path)
-
-                except Exception as e:
-                    st.error(f"Error during processing: {str(e)}")
-
-if __name__ == "__main__":
-    main()
+            os.unlink(audio_path)
