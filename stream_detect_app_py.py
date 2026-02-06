@@ -36,8 +36,8 @@ class PrototypicalNetwork(tf.keras.Model):
 def load_all():
     try:
         model = tf.keras.models.load_model(
-            "model_aksen.keras",
-            custom_objects={"PrototypicalNetwork": PrototypicalNetwork}
+            "model_detect_aksen.keras",
+            custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
         )
         print("✅ Model loaded successfully")
         print(f"Model type: {type(model)}")
