@@ -21,11 +21,16 @@ st.set_page_config(
 # ===============================
 @tf.keras.utils.register_keras_serializable()
 class PrototypicalNetwork(tf.keras.Model):
-    def __init__(self, embedding_model=None, **kwargs):
+    def __init__(self, embedding_model, **kwargs):
         super().__init__(**kwargs)
         self.embedding = embedding_model
 
-    def call(self, support_set, query_set, support_labels, n_way):
+    def call(self, inputs):
+        """
+        inputs = (support_set, query_set, support_labels, n_way)
+        """
+        support_set, query_set, support_labels, n_way = inputs
+
         support_emb = self.embedding(support_set)
         query_emb = self.embedding(query_set)
 
@@ -43,7 +48,7 @@ class PrototypicalNetwork(tf.keras.Model):
             axis=2
         )
 
-        return -distances  # logits
+        return -distances
 
 # ===============================
 # LOAD MODEL & SUPPORT SET
