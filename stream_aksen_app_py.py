@@ -29,7 +29,7 @@ class PrototypicalNetwork(tf.keras.Model):
 # ==========================================================
 @st.cache_resource
 def load_accent_model():
-    model_path = "model_aksen.keras"
+    model_path = "model_detect_aksen.keras"
     if os.path.exists(model_path):
         # Menyertakan custom_objects agar PrototypicalNetwork dikenali
         custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
