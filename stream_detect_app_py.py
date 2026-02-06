@@ -11,34 +11,35 @@ from tensorflow.keras.models import load_model
 # 1. DEFINISI CLASS PROTOTYPICAL NETWORK (WAJIB ADA)
 # Pastikan kode di dalam class ini persis sama dengan di Colab kamu
 # ==========================================================
-@tf.keras.utils.register_keras_serializable(package="Custom")
+@tf.keras.utils.register_keras_serializable()
 class PrototypicalNetwork(tf.keras.Model):
- def __init__(self, embedding_model=None, **kwargs):
+    def __init__(self, encoder, **kwargs):
         super(PrototypicalNetwork, self).__init__(**kwargs)
-	self.embedding = embedding_model
+        self.encoder = encoder
 
-  def call(self, support_set, query_set, support_labels, n_way):
+    def call(self, inputs):
+        return self.encoder(inputs)
 
+    # Tambahkan metode predict jika kamu mendefinisikannya secara custom di Colab
+    def predict(self, x):
+        return self.encoder.predict(x)
 
+# ==========================================================
+# 2. FUNGSI LOAD MODEL (PERBAIKAN ERROR 'STR')
+# ==========================================================
 @st.cache_resource
 def load_accent_model():
-model_path= "model_aksen.keras"
-if os.path.exists(model_path):
-
-try:
-            # Gunakan penamaan yang sesuai dengan metadata model Anda
-            custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
-            model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
-            return model
-        except Exception as e:
-            st.error(f"Error saat loading: {e}")
-            return None
+    model_path = "model_aksen.keras"
+    if os.path.exists(model_path):
+        # Menyertakan custom_objects agar PrototypicalNetwork dikenali
+        custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+        return model
     else:
-
- st.error(f"File {model_path} tidak ditemukan di server!")
+        st.error(f"File {model_path} tidak ditemukan!")
         return None
 
-
+# Load model secara global
 model_aksen = load_accent_model()
 
 # ==========================================================
