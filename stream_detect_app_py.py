@@ -11,41 +11,40 @@ from tensorflow.keras.models import load_model
 # 1. DEFINISI CLASS PROTOTYPICAL NETWORK (WAJIB ADA)
 # Pastikan kode di dalam class ini persis sama dengan di Colab kamu
 # ==========================================================
-def build_encoder(input_dim=13, embedding_dim=64):
-    return models.Sequential([
-        layers.Input(shape=(input_dim,)),
-        layers.Dense(128, activation="relu"),
-        layers.Dense(embedding_dim)
-    ])
-
-# -----------------------------------
-# Prototypical Network (FIX)
-# -----------------------------------
+@tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
-    def __init__(self, encoder):
-        super().__init__()
-        self.encoder = encoder
+    def __init__(self, embedding_model=None, **kwargs):
+        super(PrototypicalNetwork, self).__init__(**kwargs)
+        self.embedding = embedding_model
 
-    def call(self, inputs):
-        """
-        inputs: tf.Tensor (batch, feature)
-        """
-        embeddings = self.encoder(inputs)
-        return embeddings
+    def call(self, support_set, query_set, support_labels, n_way):
+        # Logika minimal agar Keras bisa mengonstruksi ulang model
+        return self.embedding(query_set)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "embedding_model": tf.keras.layers.serialize(self.embedding)
+        })
+        return config
 
 # ==========================================================
 # 2. FUNGSI LOAD MODEL (PERBAIKAN ERROR 'STR')
 # ==========================================================
 @st.cache_resource
 def load_accent_model():
-    model_path = "model_aksen.keras"
+    model_path = "model_aksen.keras" # Pastikan nama ini SAMA dengan di GitHub
     if os.path.exists(model_path):
-        # Menyertakan custom_objects agar PrototypicalNetwork dikenali
-        custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
-        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
-        return model
+        try:
+            # Gunakan penamaan yang sesuai dengan metadata model Anda
+            custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+            model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+            return model
+        except Exception as e:
+            st.error(f"Error saat loading: {e}")
+            return None
     else:
-        st.error(f"File {model_path} tidak ditemukan!")
+        st.error(f"File {model_path} tidak ditemukan di server!")
         return None
 
 # Load model secara global
