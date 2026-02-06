@@ -16,7 +16,7 @@ class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, embedding_model=None, **kwargs):
         super(PrototypicalNetwork, self).__init__(**kwargs)
         self.embedding = embedding_model
-
+    @tf.function
     def call(self, support_set, query_set, support_labels, n_way):
         # Logika minimal agar Keras bisa mengonstruksi ulang model
         return self.embedding(query_set)
