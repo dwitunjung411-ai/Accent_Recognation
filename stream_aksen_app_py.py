@@ -46,16 +46,14 @@ def load_accent_model():
     return None
 
 @st.cache_data
-def load_metadata():
+def load_metadata_df():
     csv_path = "metadata.csv"
     if os.path.exists(csv_path):
         return pd.read_csv(csv_path)
     return None
 
 def get_metadata_info(file_name, df_metadata):
-    """Mencari info berdasarkan nama file di metadata.csv"""
     if df_metadata is not None:
-        # Pastikan kolom 'file_name' sesuai dengan nama kolom di CSV kamu
         match = df_metadata[df_metadata['file_name'] == file_name]
         if not match.empty:
             return match.iloc[0].to_dict()
@@ -84,15 +82,24 @@ def predict_accent(audio_path, model):
 def main():
     st.set_page_config(page_title="Deteksi Aksen Prototypical", page_icon="🎙️")
     
+    # Load model dan metadata ke dalam variabel
     model_aksen = load_accent_model()
-    df_metadata = load_metadata()
+    df_metadata = load_metadata_df()
 
     st.title("🎙️ Sistem Deteksi Aksen Indonesia")
     
     with st.sidebar:
         st.header("⚙️ Status Sistem")
-        st.success("Model Terhubung") if model_aksen else st.error("Model Terputus")
-        st.success("Metadata Terhubung") if df_metadata is not None else st.warning("Metadata.csv Tidak Ada")
+        if model_aksen:
+            st.success("Model Terhubung")
+        else:
+            st.error("Model Terputus")
+            
+        if df_metadata is not None:
+            st.success("Metadata Terhubung")
+        else:
+            st.warning("Metadata.csv Tidak Ada")
+            
         st.divider()
         st.caption("Skripsi Project - Voice Recognition")
 
@@ -107,29 +114,35 @@ def main():
             if st.button("🚀 Mulai Analisis", type="primary"):
                 if model_aksen:
                     with st.spinner("Menganalisis..."):
-                        # 1. Proses Prediksi Aksen
+                        # Simpan ke file temporary
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                             tmp.write(audio_file.getbuffer())
-                            hasil_aksen = predict_accent(tmp.name, model_aksen)
+                            tmp_path = tmp.name
                         
-                        # 2. Cari data di metadata.csv secara otomatis
+                        # Jalankan prediksi
+                        hasil_aksen = predict_accent(tmp_path, model_aksen)
+                        
+                        # Ambil metadata
                         user_info = get_metadata_info(audio_file.name, df_metadata)
                         
+                        # Tampilkan hasil di kolom 2
                         with col2:
                             st.subheader("📊 Hasil Deteksi")
                             st.info(f"Aksen Terdeteksi: **{hasil_aksen}**")
                             
                             st.subheader("👤 Profil Pembicara")
                             if user_info:
-                                # Menampilkan info dari metadata
-                                st.write(f"**Usia:** {user_info.get('usia', 'Tidak diketahui')}")
-                                st.write(f"**Gender:** {user_info.get('gender', 'Tidak diketahui')}")
-                                st.write(f"**Provinsi:** {user_info.get('provinsi', 'Tidak diketahui')}")
+                                st.write(f"**Usia:** {user_info.get('usia', '-')}")
+                                st.write(f"**Gender:** {user_info.get('gender', '-')}")
+                                st.write(f"**Provinsi:** {user_info.get('provinsi', '-')}")
                             else:
-                                st.warning("Data file ini tidak ditemukan di metadata.csv")
+                                st.warning("Data tidak ditemukan di metadata.csv")
                             
-                            st.balloons()
-                        os.unlink(tmp.name)
+                            # st.balloons()  <-- BARIS INI DIHAPUS agar tidak ada animasi
+                        
+                        # Hapus file temporary
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
                 else:
                     st.error("Model tidak siap.")
 
