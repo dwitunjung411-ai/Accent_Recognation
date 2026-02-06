@@ -1,25 +1,28 @@
 import streamlit as st
-import numpy as np
-import pandas as pd
-import librosa
-import tempfile
-import os
 import tensorflow as tf
+import numpy as np
+import librosa
+import os
 from tensorflow.keras.models import load_model
 
 # ==========================================================
-# 1. DEFINISI CLASS PROTOTYPICAL NETWORK (WAJIB ADA)
-# Pastikan kode di dalam class ini persis sama dengan di Colab kamu
+# 1. FIX SYMBOLIC TENSOR ERROR
 # ==========================================================
+tf.config.run_functions_eagerly(True)
+
 @tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, embedding_model=None, **kwargs):
         super(PrototypicalNetwork, self).__init__(**kwargs)
         self.embedding = embedding_model
+
     @tf.function
-    def call(self, support_set, query_set, support_labels, n_way):
-        # Logika minimal agar Keras bisa mengonstruksi ulang model
-        return self.embedding(query_set)
+    def call(self, support_set=None, query_set=None, support_labels=None, n_way=None, training=False):
+        # Logika fleksibel: Jika hanya query_set yang dikirim (saat prediksi)
+        # atau jika data dikirim sebagai argumen pertama (default Keras)
+        if query_set is not None:
+            return self.embedding(query_set)
+        return self.embedding(support_set)
 
     def get_config(self):
         config = super().get_config()
@@ -29,38 +32,43 @@ class PrototypicalNetwork(tf.keras.Model):
         return config
 
 # ==========================================================
-# 2. FUNGSI LOAD MODEL (PERBAIKAN ERROR 'STR')
+# 2. FIX FILENOTFOUND ERROR & LOAD DATA
 # ==========================================================
 @st.cache_resource
-def load_accent_model():
-    model_path = "model_detect_aksen.keras"
-    if os.path.exists(model_path):
-        try:
-            # Gunakan penamaan yang sesuai dengan metadata model Anda
-            custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
-            model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
-            return model
-        except Exception as e:
-            st.error(f"Error saat loading: {e}")
-            return None
-    else:
-        st.error(f"File {model_path} tidak ditemukan di server!")
-        return None
+def load_all():
+    model_path = "model_aksen.h5" # Sesuaikan nama file modelmu
+    support_path = "support_set.npy"
+    label_path = "support_labels.npy"
 
-# Load model secara global
-model_aksen = load_accent_model()
+    # Cek apakah file ada sebelum di-load
+    if not os.path.exists(support_path):
+        st.error(f"⚠️ File {support_path} tidak ditemukan! Pastikan sudah di-upload ke GitHub.")
+        return None, None, None
+
+    model = load_model(model_path, custom_objects={'PrototypicalNetwork': PrototypicalNetwork}, compile=False)
+    support_set = np.load(support_path)
+    support_labels = np.load(label_path)
+    
+    return model, support_set, support_labels
 
 # ==========================================================
-# 3. FUNGSI PEMROSESAN AUDIO
+# 3. RUN APP
 # ==========================================================
-def load_metadata(csv_path):
-    if os.path.exists(csv_path):
-        return pd.read_csv(csv_path)
-    return pd.DataFrame()
+st.title("Deteksi Aksen Suara")
 
-def predict_accent(audio_path, model):
-    if model is None:
-        return "Model tidak terload"
+# Panggil fungsi load_all dengan aman
+model, support_set, support_labels = load_all()
+
+if model is not None:
+    uploaded_file = st.file_uploader("Pilih file audio...", type=["wav", "mp3"])
+    
+    if uploaded_file is not None:
+        # Tambahkan bagian Feature Extraction kamu di sini (MFCC)
+        # ...
+        
+        # Saat melakukan prediksi:
+        # prediction = model(input_mfcc) 
+        st.success("Model dan Support Set berhasil dimuat!")
 
     # Ekstraksi Fitur (Sesuaikan dengan durasi/shape saat training)
     y, sr = librosa.load(audio_path, sr=None)
