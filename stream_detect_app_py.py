@@ -5,157 +5,205 @@ import tensorflow as tf
 import tempfile
 import os
 import traceback
-from sklearn.preprocessing import StandardScaler
-import warnings
-warnings.filterwarnings('ignore')
 
 # ===============================
 # CONFIG
 # ===============================
 N_WAY = 5
+K_SHOT = 3  # Sesuaikan dengan training
 SR = 22050
 
 st.set_page_config(
-    page_title="Deteksi Aksen - Few Shot",
+    page_title="Deteksi Aksen Bahasa Indonesia",
     layout="centered"
 )
 
 # ===============================
-# FUNGSI UTAMA - TANPA LOAD MODEL
+# MODEL DEFINITION (HARUS SAMA DENGAN TRAINING)
 # ===============================
+@tf.keras.utils.register_keras_serializable()
+class PrototypicalNetwork(tf.keras.Model):
+    def __init__(self, embedding_model=None, **kwargs):
+        super().__init__(**kwargs)
+        self.embedding = embedding_model
 
+    def call(self, inputs):
+        # Untuk inference sederhana, kita hanya perlu embedding
+        return self.embedding(inputs)
+
+# ===============================
+# LOAD MODEL & SUPPORT SET
+# ===============================
 @st.cache_resource
-def load_and_prepare():
-    """Load support set dan siapkan scaler"""
+def load_all():
+    """Load semua model dan data yang diperlukan"""
     try:
-        # Load support data
-        support_set = np.load("support_set.npy")
-        support_labels = np.load("support_labels.npy")
+        # Load embedding model (lebih kecil dan mudah)
+        embedding_model = tf.keras.models.load_model(
+            "embedding_model.keras",
+            compile=False
+        )
+        st.success("✅ Embedding model loaded")
         
-        st.success(f"✅ Support set loaded: {support_set.shape}")
-        st.success(f"✅ Support labels: {support_labels.shape}")
-        
-        # Normalisasi data
-        scaler = StandardScaler()
-        support_set_normalized = scaler.fit_transform(support_set)
-        
-        # Hitung prototipe secara langsung
-        prototypes = []
-        aksen_classes = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
-        
-        for i in range(N_WAY):
-            mask = support_labels == i
-            class_data = support_set_normalized[mask]
-            if len(class_data) > 0:
-                proto = np.mean(class_data, axis=0)
-                prototypes.append(proto)
-            else:
-                prototypes.append(np.zeros(support_set.shape[1]))
-        
-        prototypes = np.array(prototypes)
-        
-        st.success(f"✅ Prototypes calculated: {prototypes.shape}")
-        
-        return support_set_normalized, support_labels, prototypes, scaler, aksen_classes
+        # Buat prototypical network dengan embedding model
+        model = PrototypicalNetwork(embedding_model)
+        model.build(input_shape=(None, 40, 174, 6))  # Sesuaikan dengan input shape Anda
         
     except Exception as e:
-        st.error(f"❌ Error loading data: {str(e)}")
-        return None, None, None, None, None
-
-def extract_features_simple(audio_path, sr=22050):
-    """Ekstrak fitur sederhana 13-dimensi"""
+        st.error(f"❌ Error loading model: {str(e)}")
+        # Fallback: buat model sederhana
+        st.info("ℹ️ Creating simple embedding model...")
+        embedding_model = tf.keras.Sequential([
+            tf.keras.layers.Input(shape=(40, 174, 6)),
+            tf.keras.layers.GlobalAveragePooling2D(),
+            tf.keras.layers.Dense(128, activation='relu'),
+            tf.keras.layers.Dense(64, activation='linear')
+        ])
+        model = PrototypicalNetwork(embedding_model)
+    
     try:
-        # Load audio (ambil 3 detik pertama)
-        y, sr = librosa.load(audio_path, sr=sr, duration=3.0)
+        # Load support set
+        support_set = np.load("support_set.npy")
+        support_labels = np.load("support_labels.npy")
+        st.success(f"✅ Support set loaded: {support_set.shape}")
         
-        # Normalisasi audio
+    except FileNotFoundError:
+        st.error("❌ Support set files not found!")
+        st.info("""
+        ℹ️ Anda perlu:
+        1. Jalankan bagian 'create_fixed_support_set' di training script
+        2. Download support_set.npy dan support_labels.npy
+        3. Upload ke folder Streamlit
+        """)
+        return None, None, None
+    
+    return model, support_set, support_labels
+
+# ===============================
+# FEATURE EXTRACTION (SAMA DENGAN TRAINING)
+# ===============================
+def extract_mfcc_metadata(audio_path, metadata_dict=None, sr=22050, n_mfcc=40, max_len=174):
+    """
+    Ekstrak MFCC + metadata seperti di training script
+    metadata_dict: {'usia': 70, 'gender': 'perempuan', 'provinsi': 'DKI Jakarta'}
+    """
+    try:
+        # Load audio
+        y, sr = librosa.load(audio_path, sr=sr, duration=3.0)
         y = librosa.util.normalize(y)
         
-        # Ekstrak 13 MFCC
+        # Ekstrak MFCC
         mfcc = librosa.feature.mfcc(
-            y=y,
-            sr=sr,
-            n_mfcc=13,
-            n_fft=2048,
-            hop_length=512
+            y=y, sr=sr, n_mfcc=n_mfcc, n_fft=2048, hop_length=512
         )
         
-        # Ambil statistik: mean, std, min, max dari 13 koefisien pertama
-        features = []
-        for i in range(min(13, mfcc.shape[0])):
-            features.append(np.mean(mfcc[i]))
-            features.append(np.std(mfcc[i]))
-            # features.append(np.min(mfcc[i]))
-            # features.append(np.max(mfcc[i]))
+        # Delta dan Delta-Delta
+        delta = librosa.feature.delta(mfcc)
+        delta2 = librosa.feature.delta(mfcc, order=2)
         
-        # Pastikan ada 13 fitur
-        features = np.array(features[:13])  # Ambil 13 pertama
+        # Padding atau truncating
+        if mfcc.shape[1] < max_len:
+            pad_width = max_len - mfcc.shape[1]
+            mfcc = np.pad(mfcc, ((0, 0), (0, pad_width)), mode='constant')
+            delta = np.pad(delta, ((0, 0), (0, pad_width)), mode='constant')
+            delta2 = np.pad(delta2, ((0, 0), (0, pad_width)), mode='constant')
+        else:
+            mfcc = mfcc[:, :max_len]
+            delta = delta[:, :max_len]
+            delta2 = delta2[:, :max_len]
+        
+        # Stack menjadi 3 channel
+        audio_features = np.stack([mfcc, delta, delta2], axis=-1)  # (40, 174, 3)
+        
+        # Jika ada metadata, tambahkan (sesuai dengan training script Anda)
+        if metadata_dict:
+            # Anda perlu menyesuaikan ini dengan preprocessing metadata di training
+            # Ini contoh sederhana
+            metadata_features = np.zeros((40, 174, 3))  # Placeholder
+            features = np.concatenate([audio_features, metadata_features], axis=-1)
+        else:
+            features = audio_features
+        
+        # Add batch dimension
+        features = features[np.newaxis, ...]  # (1, 40, 174, 3 atau 6)
         
         return features.astype(np.float32)
         
     except Exception as e:
         st.error(f"Error extracting features: {str(e)}")
-        return np.zeros(13, dtype=np.float32)
+        # Return zeros sebagai fallback
+        return np.zeros((1, 40, 174, 3), dtype=np.float32)
 
-def calculate_distances(query_features, prototypes):
-    """Hitung jarak Euclidean"""
-    # Pastikan shape cocok
-    if len(query_features.shape) == 1:
-        query_features = query_features.reshape(1, -1)
+# ===============================
+# PROTOTYPE COMPUTATION
+# ===============================
+@st.cache_data
+def compute_prototypes(_model, _support_set, _support_labels, n_way):
+    """Hitung prototipe dari support set"""
+    # Dapatkan embeddings untuk support set
+    support_embeddings = _model.predict(_support_set, verbose=0)
     
-    # Hitung jarak Euclidean
-    distances = np.sqrt(np.sum((query_features - prototypes) ** 2, axis=1))
+    prototypes = []
+    for i in range(n_way):
+        mask = _support_labels == i
+        class_emb = support_embeddings[mask]
+        if len(class_emb) > 0:
+            prototype = np.mean(class_emb, axis=0)
+        else:
+            prototype = np.zeros(support_embeddings.shape[1])
+        prototypes.append(prototype)
     
-    # Konversi ke similarity score (lebih tinggi = lebih mirim)
-    similarities = 1 / (1 + distances)
-    
-    return distances, similarities
+    return np.array(prototypes)
 
 # ===============================
 # STREAMLIT UI
 # ===============================
-
 def main():
     st.title("🎙️ Deteksi Aksen Bahasa Indonesia")
-    st.write("Menggunakan Few-Shot Learning dengan Prototypical Network")
-    st.write("**Mode: Direct Distance Calculation**")
+    st.write("Menggunakan Prototypical Network (Few-Shot Learning)")
     
-    # Load data
-    with st.spinner("Memuat data support set..."):
-        support_set_norm, support_labels, prototypes, scaler, aksen_classes = load_and_prepare()
+    # Load model dan data
+    with st.spinner("Memuat model dan data..."):
+        model, support_set, support_labels = load_all()
     
-    if support_set_norm is None:
-        st.error("Gagal memuat data. Pastikan file support_set.npy dan support_labels.npy ada.")
+    if model is None:
+        st.error("Tidak dapat memuat model. Pastikan file-file sudah diupload.")
         st.stop()
     
-    st.divider()
+    # Hitung prototipe
+    with st.spinner("Menghitung prototipe..."):
+        prototypes = compute_prototypes(model, support_set, support_labels, N_WAY)
+        st.success(f"✅ Prototipe dihitung: {prototypes.shape}")
     
-    # Sidebar info
+    # Sidebar untuk metadata (opsional)
     with st.sidebar:
-        st.header("📊 Informasi Sistem")
-        st.write(f"**Jumlah kelas:** {N_WAY}")
-        st.write(f"**Fitur dimensi:** {prototypes.shape[1]}")
-        st.write(f"**Samples support:** {len(support_set_norm)}")
+        st.header("📋 Metadata (Opsional)")
+        usia = st.number_input("Usia", min_value=10, max_value=100, value=25)
+        gender = st.selectbox("Gender", ["perempuan", "laki-laki"])
+        provinsi = st.selectbox("Provinsi", [
+            "DKI Jakarta", "Jawa Barat", "Jawa Tengah", 
+            "Jawa Timur", "Yogyakarta"
+        ])
         
-        st.divider()
-        
-        st.header("📋 Kelas Aksen")
-        for i, cls in enumerate(aksen_classes):
-            count = np.sum(support_labels == i)
-            st.write(f"{i+1}. {cls} ({count} samples)")
+        metadata_dict = {
+            'usia': usia,
+            'gender': gender,
+            'provinsi': provinsi
+        }
     
     # Main content
+    st.divider()
     st.subheader("📤 Upload Audio")
     
     audio_file = st.file_uploader(
         "Pilih file audio (.wav, .mp3)",
         type=["wav", "mp3"],
-        help="Upload rekaman suara untuk dideteksi aksennya"
+        help="File audio akan diproses untuk deteksi aksen"
     )
     
     if audio_file:
         # Tampilkan audio
-        st.audio(audio_file, format="audio/wav")
+        st.audio(audio_file)
         
         col1, col2 = st.columns(2)
         with col1:
@@ -168,46 +216,54 @@ def main():
                     
                     try:
                         # 1. Ekstrak fitur
-                        features = extract_features_simple(audio_path)
+                        features = extract_mfcc_metadata(audio_path, metadata_dict)
                         
-                        # 2. Normalisasi dengan scaler yang sama
-                        features_normalized = scaler.transform(features.reshape(1, -1))
+                        # 2. Dapatkan embedding query
+                        query_embedding = model.predict(features, verbose=0)
                         
-                        # 3. Hitung jarak ke prototipe
-                        distances, similarities = calculate_distances(features_normalized, prototypes)
+                        # 3. Hitung jarak Euclidean ke prototipe
+                        distances = np.linalg.norm(
+                            query_embedding[:, np.newaxis, :] - prototypes[np.newaxis, :, :],
+                            axis=2
+                        )
                         
-                        # 4. Konversi ke probabilitas dengan softmax
-                        # Gunakan negative distances untuk softmax (lebih kecil = lebih baik)
-                        exp_scores = np.exp(-distances)
-                        probs = exp_scores / np.sum(exp_scores)
+                        # 4. Konversi ke probabilitas (softmax over negative distances)
+                        logits = -distances
+                        exp_logits = np.exp(logits - np.max(logits))
+                        probs = exp_logits / np.sum(exp_logits)
                         
                         # 5. Ambil prediksi
-                        pred_idx = np.argmax(probs)
+                        pred_idx = np.argmax(probs[0])
+                        
+                        # Kelas aksen
+                        aksen_classes = [
+                            "Sunda (Jawa Barat)",
+                            "Jawa Tengah", 
+                            "Jawa Timur",
+                            "Yogyakarta",
+                            "Betawi (Jakarta)"
+                        ]
                         
                         # TAMPILKAN HASIL
                         st.divider()
                         st.subheader("📊 Hasil Deteksi")
                         
                         # Hasil utama
-                        col_a, col_b, col_c = st.columns([1, 2, 1])
-                        with col_b:
-                            color = "#4CAF50" if probs[pred_idx] > 0.5 else "#FF9800"
-                            st.markdown(f"""
-                            <div style="text-align: center; padding: 20px; border-radius: 10px; 
-                                        background-color: {color};
-                                        color: white; margin: 20px 0;">
-                                <h2 style="margin: 0;">{aksen_classes[pred_idx]}</h2>
-                                <p style="margin: 5px 0 0 0; font-size: 1.2em;">
-                                    Confidence: {probs[pred_idx]*100:.1f}%
-                                </p>
-                            </div>
-                            """, unsafe_allow_html=True)
+                        confidence = probs[0][pred_idx] * 100
+                        if confidence > 70:
+                            st.success(f"🎯 **Aksen Terdeteksi: {aksen_classes[pred_idx]}**")
+                        elif confidence > 50:
+                            st.warning(f"⚠️ **Aksen Terdeteksi: {aksen_classes[pred_idx]}**")
+                        else:
+                            st.info(f"💡 **Aksen Terdeteksi: {aksen_classes[pred_idx]}**")
+                        
+                        st.write(f"**Confidence: {confidence:.1f}%**")
                         
                         # Grafik probabilitas
                         st.write("### 📈 Probabilitas per Kelas:")
                         
-                        for i, (cls, prob) in enumerate(zip(aksen_classes, probs)):
-                            cols = st.columns([2, 6, 2])
+                        for i, (cls, prob) in enumerate(zip(aksen_classes, probs[0])):
+                            cols = st.columns([3, 5, 2])
                             with cols[0]:
                                 if i == pred_idx:
                                     st.markdown(f"**🏆 {cls}**")
@@ -218,18 +274,13 @@ def main():
                             with cols[2]:
                                 st.write(f"{prob*100:.1f}%")
                         
-                        # Detail teknis (expander)
+                        # Detail teknis
                         with st.expander("🔧 Detail Teknis"):
-                            st.write("**Fitur yang diekstrak:**")
-                            st.dataframe(features.reshape(1, -1), use_container_width=True)
-                            
+                            st.write(f"**Shape fitur:** {features.shape}")
+                            st.write(f"**Shape embedding:** {query_embedding.shape}")
                             st.write("**Jarak ke prototipe:**")
-                            for i, (cls, dist) in enumerate(zip(aksen_classes, distances)):
+                            for i, (cls, dist) in enumerate(zip(aksen_classes, distances[0])):
                                 st.write(f"{cls}: {dist:.3f}")
-                            
-                            st.write("**Similarity scores:**")
-                            for i, (cls, sim) in enumerate(zip(aksen_classes, similarities)):
-                                st.write(f"{cls}: {sim:.3f}")
                                 
                     except Exception as e:
                         st.error(f"❌ Error selama pemrosesan: {str(e)}")
@@ -244,16 +295,19 @@ def main():
             if st.button("🔄 Reset", use_container_width=True):
                 st.rerun()
     
-    # Tambahkan penjelasan
+    # Penjelasan sistem
     st.divider()
-    with st.expander("ℹ️ Cara Kerja Sistem"):
+    with st.expander("ℹ️ Tentang Sistem Ini"):
         st.write("""
-        1. **Ekstraksi Fitur**: Sistem mengekstrak 13 fitur MFCC dari audio
-        2. **Normalisasi**: Fitur dinormalisasi menggunakan StandardScaler
-        3. **Perhitungan Jarak**: Dihitung jarak Euclidean ke prototipe setiap kelas
-        4. **Klasifikasi**: Kelas dengan jarak terdekat dipilih sebagai prediksi
+        **Cara Kerja:**
+        1. Sistem mengekstrak fitur MFCC dari audio
+        2. Fitur dipetakan ke embedding space menggunakan neural network
+        3. Dihitung jarak ke prototipe setiap kelas aksen
+        4. Kelas dengan jarak terdekat dipilih sebagai prediksi
         
-        **Prototipe** dihitung sebagai rata-rata dari support set setiap kelas.
+        **Prototipe** adalah rata-rata dari beberapa sampel setiap aksen.
+        
+        **Teknologi:** Few-Shot Learning dengan Prototypical Network
         """)
 
 if __name__ == "__main__":
