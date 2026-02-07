@@ -15,10 +15,7 @@ class PrototypicalNetwork(tf.keras.Model):
         super(PrototypicalNetwork, self).__init__(**kwargs)
         self.embedding = embedding_model
 
-   def call(self, support_set, query_set, support_labels, n_way, training=False):
-    # Cek apakah support_set ada isinya
-    if support_set is None:
-        raise ValueError("Support set tidak boleh None")
+  def call(self, support_set, query_set, support_labels, n_way, training=False):
         
     # Pastikan support_set diproses oleh embedding
     support_embeddings = self.embedding(support_set)
