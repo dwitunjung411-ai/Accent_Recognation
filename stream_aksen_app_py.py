@@ -7,7 +7,7 @@ import os
 import tensorflow as tf
 
 # ==========================================================
-# 1. DEFINISI CLASS PROTOTYPICAL NETWORK (WAJIB SAMA DENGAN TRAINING)
+# 1. DEFINISI CLASS PROTOTYPICAL NETWORK (PERBAIKAN INDENTASI)
 # ==========================================================
 @tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
@@ -15,18 +15,23 @@ class PrototypicalNetwork(tf.keras.Model):
         super(PrototypicalNetwork, self).__init__(**kwargs)
         self.embedding = embedding_model
 
-  def call(self, support_set, query_set, support_labels, n_way, training=False):
-        
-    # Pastikan support_set diproses oleh embedding
-    support_embeddings = self.embedding(support_set)
-    query_embeddings = self.embedding(query_set)
-    # ... sisa kode selanjutnya ...
+    # Pastikan 'def call' masuk ke dalam blok class (sejajar dengan def __init__)
+    def call(self, support_set, query_set, support_labels, n_way, training=False):
+        # Forward pass untuk mendapatkan embedding
+        support_embeddings = self.embedding(support_set)
+        query_embeddings = self.embedding(query_set)
+
         # Hitung Prototypes per kelas
         prototypes = []
         for i in range(n_way):
             mask = tf.equal(support_labels, i)
             class_embeddings = tf.boolean_mask(support_embeddings, mask)
-            prototype = tf.reduce_mean(class_embeddings, axis=0)
+            
+            # Cegah error jika class_embeddings kosong
+            if tf.shape(class_embeddings)[0] == 0:
+                prototype = tf.zeros_like(support_embeddings[0])
+            else:
+                prototype = tf.reduce_mean(class_embeddings, axis=0)
             prototypes.append(prototype)
 
         prototypes = tf.stack(prototypes)
@@ -44,7 +49,7 @@ class PrototypicalNetwork(tf.keras.Model):
         return config
 
 # ==========================================================
-# 2. FUNGSI EKSTRAKSI FITUR (SAMA DENGAN COLAB)
+# 2. FUNGSI EKSTRAKSI FITUR (3-CHANNEL SESUAI SKRIPSI)
 # ==========================================================
 def extract_mfcc_3channel(file_path, sr=22050, n_mfcc=40, max_len=174):
     try:
@@ -54,7 +59,6 @@ def extract_mfcc_3channel(file_path, sr=22050, n_mfcc=40, max_len=174):
         delta = librosa.feature.delta(mfcc)
         delta2 = librosa.feature.delta(mfcc, order=2)
 
-        # Padding/Truncating
         if mfcc.shape[1] < max_len:
             pad_width = max_len - mfcc.shape[1]
             mfcc = np.pad(mfcc, ((0, 0), (0, pad_width)), mode='constant')
@@ -65,79 +69,72 @@ def extract_mfcc_3channel(file_path, sr=22050, n_mfcc=40, max_len=174):
 
         return np.stack([mfcc, delta, delta2], axis=-1)
     except Exception as e:
-        st.error(f"Gagal ekstrak fitur: {e}")
+        st.error(f"Error Ekstraksi: {e}")
         return None
 
 # ==========================================================
-# 3. HELPER LOAD MODEL & DATA
+# 3. LOAD ASSETS & MODEL
 # ==========================================================
 @st.cache_resource
 def load_all_assets():
-    model_path = "model_detect_aksen.keras" # Pastikan file ini ada di folder yang sama
+    model_path = "model_aksen.keras" 
     custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
     
     if os.path.exists(model_path):
-        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
-        # Dummy Support Set (Idealnya kamu muat dari file .npy hasil training)
-        # Di sini kita asumsikan n_way=5, k_shot=1, feature_shape=(40, 174, 3)
-        # UNTUK AKURASI TERBAIK: Muat support_set asli dari X_train kamu
-        support_set = np.random.randn(5, 40, 174, 3).astype(np.float32) 
-        support_labels = np.array([0, 1, 2, 3, 4], dtype=np.int32)
-        return model, support_set, support_labels
+        try:
+            model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+            # Support set placeholder (Pastikan dimensinya sesuai training)
+            support_set = np.random.randn(5, 40, 174, 3).astype(np.float32) 
+            support_labels = np.array([0, 1, 2, 3, 4], dtype=np.int32)
+            return model, support_set, support_labels
+        except Exception as e:
+            st.error(f"Gagal memuat model: {e}")
+            return None, None, None
     return None, None, None
 
 # ==========================================================
-# 4. MAIN INTERFACE
+# 4. HALAMAN UTAMA
 # ==========================================================
 def main():
-    st.set_page_config(page_title="Deteksi Aksen Prototypical", layout="wide")
-    st.title("🎭 Sistem Deteksi Aksen (Few-Shot Learning)")
+    st.set_page_config(page_title="Deteksi Aksen", layout="wide")
+    st.title("🎭 Sistem Deteksi Aksen")
     
     model, support_set, support_labels = load_all_assets()
     aksen_classes = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
 
     if model is None:
-        st.error("Model 'model_aksen.keras' tidak ditemukan!")
+        st.error("Model tidak ditemukan atau gagal dimuat.")
         return
 
-    audio_file = st.file_uploader("Unggah Audio (.wav)", type=["wav"])
+    audio_file = st.file_uploader("Upload Audio (.wav)", type=["wav"])
 
     if audio_file:
         st.audio(audio_file)
         
-        if st.button("Analisis Aksen", type="primary"):
-            with st.spinner("Menganalisis..."):
+        if st.button("Analisis Aksen"):
+            with st.spinner("Sedang Menganalisis..."):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                     tmp.write(audio_file.getbuffer())
                     
-                    # 1. Ekstrak Fitur Query
+                    # 1. Ekstrak Fitur
                     query_feat = extract_mfcc_3channel(tmp.name)
+                    
                     if query_feat is not None:
-                        # Tambah batch dimension
-                        query_tensor = np.expand_dims(query_feat, axis=0) 
+                        # 2. Persiapkan Tensor (PENTING: Harus dalam tf.Tensor)
+                        query_tensor = tf.convert_to_tensor(np.expand_dims(query_feat, axis=0), dtype=tf.float32)
+                        support_tensor = tf.convert_to_tensor(support_set, dtype=tf.float32)
+                        labels_tensor = tf.convert_to_tensor(support_labels, dtype=tf.int32)
                         
-                        # 2. Prediksi via Call (Few-Shot Inference)
-                        # Di dalam fungsi main(), bagian Analisis Aksen:
-with st.spinner("Menganalisis..."):
-    # ... proses ekstraksi fitur query ...
-    
-    # PASTIKAN KONVERSI TENSOR DI SINI
-    support_tensor = tf.convert_to_tensor(support_set, dtype=tf.float32)
-    query_tensor = tf.convert_to_tensor(query_tensor, dtype=tf.float32)
-    labels_tensor = tf.convert_to_tensor(support_labels, dtype=tf.int32)
-
-    # Panggil model dengan argumen yang sudah menjadi tensor
-    logits = model.call(
-        support_set=support_tensor, 
-        query_set=query_tensor, 
-        support_labels=labels_tensor, 
-        n_way=5
-    )
+                        # 3. Prediksi
+                        logits = model.call(
+                            support_set=support_tensor,
+                            query_set=query_tensor,
+                            support_labels=labels_tensor,
+                            n_way=5
+                        )
                         
                         pred_idx = np.argmax(logits.numpy())
-                        hasil = aksen_classes[pred_idx]
-                        
-                        st.success(f"### Aksen Terdeteksi: {hasil}")
+                        st.success(f"### Aksen Terdeteksi: {aksen_classes[pred_idx]}")
                     
                     os.unlink(tmp.name)
 
