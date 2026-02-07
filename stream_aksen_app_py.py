@@ -78,25 +78,59 @@ def extract_mfcc_3channel(file_path, sr=22050, n_mfcc=40, max_len=174):
 # ==========================================================
 # 3. LOAD MODEL & ASSETS
 # ==========================================================
+# ==========================================================
+# PERBAIKAN FUNGSI LOADING (MENGATASI TRACKEDDICT ERROR)
+# ==========================================================
 @st.cache_resource
 def load_resources():
-    model_path = "model_detect_aksen.keras" 
+    model_path = "model_aksen.keras" 
     if not os.path.exists(model_path):
         return None, None, None
     
     try:
+        # Gunakan safe_mode=False untuk memaksa pemuatan objek kustom
         custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
-        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
+        model = tf.keras.models.load_model(
+            model_path, 
+            custom_objects=custom_objects, 
+            compile=False # Tambahkan ini agar tidak error saat compile internal
+        )
         
-        # Buat dummy support set yang valid (5 kelas, 1 contoh per kelas)
-        # Sesuai input: (n, mfcc, time, channels)
+        # VALIDASI: Pastikan embedding adalah model, bukan Dict
+        # Jika model.embedding adalah dict, kita coba akses model di dalamnya
+        if isinstance(model.embedding, dict):
+            st.warning("Deteksi ketidakkonsistenan model, mencoba restrukturisasi...")
+            # Teknik ini memaksa Keras membangun ulang layer dari config
+            model.embedding = tf.keras.layers.deserialize(model.embedding)
+
+        # Support set dummy untuk referensi
         support_set = np.random.randn(5, 40, 174, 3).astype(np.float32)
         support_labels = np.array([0, 1, 2, 3, 4], dtype=np.int32)
         
         return model, support_set, support_labels
     except Exception as e:
-        st.error(f"Gagal Load Model: {e}")
+        st.error(f"Gagal Load Model secara mendalam: {e}")
         return None, None, None
+
+# ==========================================================
+# PERBAIKAN PEMANGGILAN PREDIKSI (DI DALAM MAIN)
+# ==========================================================
+# Di dalam tombol analisis, gunakan penanganan error yang lebih ketat:
+try:
+    # Memastikan model benar-benar bisa dijalankan
+    logits = model(
+        [support_set, query_tensor, support_labels, np.array([5])], 
+        training=False
+    )
+    
+    # Jika cara di atas masih error, gunakan pemanggilan manual:
+    # logits = model.call(support_set, query_tensor, support_labels, 5)
+    
+    pred_idx = np.argmax(logits.numpy())
+    st.success(f"### Hasil: Aksen {aksen_list[pred_idx]}")
+except Exception as e:
+    st.error(f"Kesalahan Fatal saat Analisis: {e}")
+    st.info("Saran: Silakan simpan ulang model di Colab menggunakan model.save_weights() dan bangun ulang arsitektur di sini.")
 
 # ==========================================================
 # 4. INTERFACE
