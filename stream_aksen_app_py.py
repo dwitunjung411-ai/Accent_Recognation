@@ -15,11 +15,15 @@ class PrototypicalNetwork(tf.keras.Model):
         super(PrototypicalNetwork, self).__init__(**kwargs)
         self.embedding = embedding_model
 
-    def call(self, support_set, query_set, support_labels, n_way, training=False):
-        # Forward pass untuk mendapatkan embedding
-        support_embeddings = self.embedding(support_set)
-        query_embeddings = self.embedding(query_set)
-
+   def call(self, support_set, query_set, support_labels, n_way, training=False):
+    # Cek apakah support_set ada isinya
+    if support_set is None:
+        raise ValueError("Support set tidak boleh None")
+        
+    # Pastikan support_set diproses oleh embedding
+    support_embeddings = self.embedding(support_set)
+    query_embeddings = self.embedding(query_set)
+    # ... sisa kode selanjutnya ...
         # Hitung Prototypes per kelas
         prototypes = []
         for i in range(n_way):
@@ -116,12 +120,22 @@ def main():
                         query_tensor = np.expand_dims(query_feat, axis=0) 
                         
                         # 2. Prediksi via Call (Few-Shot Inference)
-                        logits = model.call(
-                            support_set=tf.convert_to_tensor(support_set),
-                            query_set=tf.convert_to_tensor(query_tensor),
-                            support_labels=tf.convert_to_tensor(support_labels),
-                            n_way=5
-                        )
+                        # Di dalam fungsi main(), bagian Analisis Aksen:
+with st.spinner("Menganalisis..."):
+    # ... proses ekstraksi fitur query ...
+    
+    # PASTIKAN KONVERSI TENSOR DI SINI
+    support_tensor = tf.convert_to_tensor(support_set, dtype=tf.float32)
+    query_tensor = tf.convert_to_tensor(query_tensor, dtype=tf.float32)
+    labels_tensor = tf.convert_to_tensor(support_labels, dtype=tf.int32)
+
+    # Panggil model dengan argumen yang sudah menjadi tensor
+    logits = model.call(
+        support_set=support_tensor, 
+        query_set=query_tensor, 
+        support_labels=labels_tensor, 
+        n_way=5
+    )
                         
                         pred_idx = np.argmax(logits.numpy())
                         hasil = aksen_classes[pred_idx]
