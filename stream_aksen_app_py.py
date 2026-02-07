@@ -77,7 +77,7 @@ def extract_mfcc_3channel(file_path, sr=22050, n_mfcc=40, max_len=174):
 # ==========================================================
 @st.cache_resource
 def load_all_assets():
-    model_path = "model_aksen.keras" 
+    model_path = "model_detect_aksen.keras" 
     custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
     
     if os.path.exists(model_path):
