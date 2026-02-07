@@ -7,7 +7,7 @@ import os
 import tensorflow as tf
 
 # ==========================================================
-# 1. DEFINISI CLASS MODEL (DENGAN PERBAIKAN SERIALISASI)
+# 1. DEFINISI CLASS MODEL (STABLE VERSION)
 # ==========================================================
 @tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
@@ -15,35 +15,27 @@ class PrototypicalNetwork(tf.keras.Model):
         super(PrototypicalNetwork, self).__init__(**kwargs)
         self.embedding = embedding_model
 
-    def call(self, inputs, training=False):
-        # Menerima list [support_set, query_set, support_labels, n_way]
-        support_set, query_set, support_labels, n_way = inputs
-        
-        # Pastikan input adalah tensor
+    def call(self, support_set, query_set, support_labels, n_way):
+        # Memastikan semua input dalam format Tensor Float32
         support_set = tf.cast(support_set, tf.float32)
         query_set = tf.cast(query_set, tf.float32)
         support_labels = tf.cast(support_labels, tf.int32)
-        n_way_val = int(n_way[0]) if isinstance(n_way, (np.ndarray, tf.Tensor)) else int(n_way)
-
-        # Mendapatkan embedding fitur
+        
+        # Ekstraksi fitur embedding
         support_embeddings = self.embedding(support_set)
         query_embeddings = self.embedding(query_set)
 
-        # Kalkulasi Prototype
+        # Kalkulasi Prototype (Rata-rata fitur per kelas)
         prototypes = []
-        for i in range(n_way_val):
+        for i in range(n_way):
             mask = tf.equal(support_labels, i)
             class_embeddings = tf.boolean_mask(support_embeddings, mask)
-            
-            if tf.shape(class_embeddings)[0] == 0:
-                prototype = tf.zeros_like(support_embeddings[0])
-            else:
-                prototype = tf.reduce_mean(class_embeddings, axis=0)
+            prototype = tf.reduce_mean(class_embeddings, axis=0)
             prototypes.append(prototype)
 
         prototypes = tf.stack(prototypes)
 
-        # Kalkulasi jarak Euclidean
+        # Kalkulasi jarak Euclidean (Negatif jarak sebagai logits)
         distances = tf.norm(
             tf.expand_dims(query_embeddings, 1) - tf.expand_dims(prototypes, 0),
             axis=2
@@ -52,16 +44,8 @@ class PrototypicalNetwork(tf.keras.Model):
 
     def get_config(self):
         config = super().get_config()
-        # Simpan embedding model sebagai layer yang bisa dikonstruksi ulang
         config.update({"embedding_model": tf.keras.layers.serialize(self.embedding)})
         return config
-
-    @classmethod
-    def from_config(cls, config):
-        # Membangun ulang embedding_model dari config
-        embedding_config = config.pop("embedding_model")
-        embedding_model = tf.keras.layers.deserialize(embedding_config)
-        return cls(embedding_model=embedding_model, **config)
 
 # ==========================================================
 # 2. FUNGSI EKSTRAKSI MFCC 3-CHANNEL
@@ -88,7 +72,7 @@ def extract_mfcc_3channel(file_path, sr=22050, n_mfcc=40, max_len=174):
         return None
 
 # ==========================================================
-# 3. LOADING MODEL & ASSETS
+# 3. LOADING MODEL & DATA REFERENSI
 # ==========================================================
 @st.cache_resource
 def load_resources():
@@ -98,12 +82,11 @@ def load_resources():
     
     try:
         custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
-        # Gunakan compile=False untuk menghindari masalah loading weights kustom
         model = tf.keras.models.load_model(model_path, custom_objects=custom_objects, compile=False)
         
-        # Validasi jika embedding masih berupa dict
+        # Mengatasi masalah TrackedDict pada embedding
         if isinstance(model.embedding, dict):
-             model.embedding = tf.keras.layers.deserialize(model.embedding)
+            model.embedding = tf.keras.layers.deserialize(model.embedding)
 
         # Support set dummy (Ganti dengan file .npy asli untuk akurasi nyata)
         support_set = np.random.randn(5, 40, 174, 3).astype(np.float32) 
@@ -115,7 +98,7 @@ def load_resources():
         return None, None, None
 
 # ==========================================================
-# 4. MAIN INTERFACE
+# 4. ANTARMUKA UTAMA
 # ==========================================================
 def main():
     st.set_page_config(page_title="Analisis Aksen Prototypical", layout="centered")
@@ -126,7 +109,7 @@ def main():
     aksen_list = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
 
     if model is None:
-        st.error(f"File model_detect_aksen.keras tidak ditemukan di direktori!")
+        st.error("Model tidak ditemukan! Pastikan 'model_detect_aksen.keras' ada di folder aplikasi.")
         return
 
     audio_file = st.file_uploader("Upload Rekaman Suara (.wav)", type=["wav"])
@@ -134,7 +117,7 @@ def main():
     if audio_file:
         st.audio(audio_file)
         
-        if st.button("🚀 Analisis Aksen Sekarang", type="primary"):
+        if st.button("🚀 Mulai Analisis Aksen", type="primary"):
             with st.spinner("Mengekstrak fitur dan membandingkan..."):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                     tmp.write(audio_file.getbuffer())
@@ -142,18 +125,21 @@ def main():
                     query_feat = extract_mfcc_3channel(tmp.name)
                     
                     if query_feat is not None:
-                        query_tensor = np.expand_dims(query_feat, axis=0).astype(np.float32) 
+                        # Langkah Kunci: Gunakan tf.convert_to_tensor untuk menghindari Cardinality Error
+                        query_tensor = tf.convert_to_tensor(np.expand_dims(query_feat, axis=0), dtype=tf.float32)
+                        support_tensor = tf.convert_to_tensor(support_set, dtype=tf.float32)
+                        labels_tensor = tf.convert_to_tensor(support_labels, dtype=tf.int32)
                         
                         try:
-                            # Menjalankan model dengan list input (lebih stabil untuk objek kustom)
-                            logits = model.predict([
-                                support_set, 
-                                query_tensor, 
-                                support_labels, 
-                                np.array([5])
-                            ])
+                            # Memanggil fungsi .call secara langsung (Bukan .predict)
+                            logits = model.call(
+                                support_set=support_tensor,
+                                query_set=query_tensor,
+                                support_labels=labels_tensor,
+                                n_way=5
+                            )
                             
-                            pred_idx = np.argmax(logits[0])
+                            pred_idx = np.argmax(logits.numpy()[0])
                             st.balloons()
                             st.success(f"### Aksen Terdeteksi: **{aksen_list[pred_idx]}**")
                         except Exception as e:
