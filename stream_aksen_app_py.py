@@ -81,7 +81,7 @@ def extract_mfcc_3channel(file_path, sr=22050, n_mfcc=40, max_len=174):
 # ==========================================================
 @st.cache_resource
 def load_resources():
-    model_path = "model_aksen.keras" 
+    model_path = "model_detect_aksen.keras" 
     if not os.path.exists(model_path):
         return None, None, None
     
