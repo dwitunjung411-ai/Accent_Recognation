@@ -109,11 +109,11 @@ def load_support_set():
     """
     Struktur folder:
     data/
-      jakarta/
+      Betawi/
       sunda/
-      jawa/
-      batak/
-      minang/
+      Jawa_Tengah/
+      Jawa_Timur/
+      YogyaKarta/
     """
     DATA_DIR = "data"
     n_way = 5
