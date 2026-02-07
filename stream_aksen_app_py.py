@@ -15,27 +15,26 @@ class PrototypicalNetwork(tf.keras.Model):
         super(PrototypicalNetwork, self).__init__(**kwargs)
         self.embedding = embedding_model
 
-    def call(self, support_set, query_set, support_labels, n_way):
-        # Memastikan semua input dalam format Tensor Float32
-        support_set = tf.cast(support_set, tf.float32)
-        query_set = tf.cast(query_set, tf.float32)
-        support_labels = tf.cast(support_labels, tf.int32)
-        
-        # Ekstraksi fitur embedding
+    # Perbaikan: Tambahkan argumen query_set secara eksplisit di sini
+    def call(self, support_set, query_set, support_labels, n_way, training=False):
+        # Pastikan input adalah tensor agar tidak error saat masuk ke self.embedding
+        support_set = tf.convert_to_tensor(support_set, dtype=tf.float32)
+        query_set = tf.convert_to_tensor(query_set, dtype=tf.float32)
+
+        # Mendapatkan embedding fitur
         support_embeddings = self.embedding(support_set)
         query_embeddings = self.embedding(query_set)
 
-        # Kalkulasi Prototype (Rata-rata fitur per kelas)
+        # Logika Prototype
         prototypes = []
         for i in range(n_way):
             mask = tf.equal(support_labels, i)
             class_embeddings = tf.boolean_mask(support_embeddings, mask)
             prototype = tf.reduce_mean(class_embeddings, axis=0)
             prototypes.append(prototype)
-
         prototypes = tf.stack(prototypes)
 
-        # Kalkulasi jarak Euclidean (Negatif jarak sebagai logits)
+        # Jarak Euclidean
         distances = tf.norm(
             tf.expand_dims(query_embeddings, 1) - tf.expand_dims(prototypes, 0),
             axis=2
@@ -117,31 +116,25 @@ def main():
     if audio_file:
         st.audio(audio_file)
         
-        if st.button("🚀 Mulai Analisis Aksen", type="primary"):
-            with st.spinner("Mengekstrak fitur dan membandingkan..."):
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                    tmp.write(audio_file.getbuffer())
-                    
-                    query_feat = extract_mfcc_3channel(tmp.name)
-                    
-                    if query_feat is not None:
-                        # Langkah Kunci: Gunakan tf.convert_to_tensor untuk menghindari Cardinality Error
-                        query_tensor = tf.convert_to_tensor(np.expand_dims(query_feat, axis=0), dtype=tf.float32)
-                        support_tensor = tf.convert_to_tensor(support_set, dtype=tf.float32)
-                        labels_tensor = tf.convert_to_tensor(support_labels, dtype=tf.int32)
-                        
-                        try:
-                            # Memanggil fungsi .call secara langsung (Bukan .predict)
-                            logits = model.call(
-                                support_set=support_tensor,
-                                query_set=query_tensor,
-                                support_labels=labels_tensor,
-                                n_way=5
-                            )
-                            
-                            pred_idx = np.argmax(logits.numpy()[0])
-                            st.balloons()
-                            st.success(f"### Aksen Terdeteksi: **{aksen_list[pred_idx]}**")
+       # Cari bagian ini di fungsi main() kamu:
+if st.button("🚀 Analisis Aksen Sekarang", type="primary"):
+    # ... (proses ekstraksi mfcc) ...
+    
+    if query_feat is not None:
+        # Masukkan fitur audio ke dalam query_tensor
+        query_tensor = np.expand_dims(query_feat, axis=0).astype(np.float32) 
+        
+        # SOLUSI UTAMA: Panggil .call secara manual dengan nama argumen yang jelas
+        logits = model.call(
+            support_set=support_set,    # Data referensi
+            query_set=query_tensor,     # DATA AUDIO YANG DIUNGGAH (Query Set)
+            support_labels=support_labels, 
+            n_way=5
+        )
+        
+        # Ambil hasil prediksi
+        pred_idx = np.argmax(logits.numpy()[0])
+        st.success(f"### Aksen Terdeteksi: **{aksen_list[pred_idx]}**")
                         except Exception as e:
                             st.error(f"Kesalahan Analisis: {e}")
                     
