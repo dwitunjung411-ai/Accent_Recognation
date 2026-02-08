@@ -6,133 +6,65 @@ import tempfile
 import os
 import tensorflow as tf
 import traceback
-import pickle
-from datetime import datetime
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
-import warnings
-warnings.filterwarnings('ignore')
+from sklearn.preprocessing import LabelEncoder
 
 # ==========================================================
-# 1. KONFIGURASI AWAL
-# ==========================================================
-# Set page config
-st.set_page_config(
-    page_title="Sistem Deteksi Aksen & Analisis Suara Multi-Task",
-    page_icon="🎙️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Custom CSS
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1E3A8A;
-        text-align: center;
-        margin-bottom: 1rem;
-    }
-    .sub-header {
-        font-size: 1.5rem;
-        color: #374151;
-        margin-top: 1.5rem;
-        margin-bottom: 1rem;
-        border-bottom: 2px solid #E5E7EB;
-        padding-bottom: 0.5rem;
-    }
-    .metric-card {
-        background-color: #F9FAFB;
-        padding: 1.5rem;
-        border-radius: 10px;
-        border-left: 5px solid #3B82F6;
-        margin-bottom: 1rem;
-    }
-    .result-card {
-        background-color: #F0F9FF;
-        padding: 1.5rem;
-        border-radius: 10px;
-        border: 1px solid #BFDBFE;
-        margin-bottom: 1rem;
-    }
-    .warning-card {
-        background-color: #FEF3C7;
-        padding: 1rem;
-        border-radius: 8px;
-        border-left: 5px solid #F59E0B;
-        margin-bottom: 1rem;
-    }
-    .success-card {
-        background-color: #D1FAE5;
-        padding: 1rem;
-        border-radius: 8px;
-        border-left: 5px solid #10B981;
-        margin-bottom: 1rem;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ==========================================================
-# 2. DEFINISI MODEL MULTI-TASK
+# 1. DEFINISI CLASS MODEL (PERBAIKAN)
 # ==========================================================
 @tf.keras.utils.register_keras_serializable(package="Custom")
-class MultiTaskPrototypicalNetwork(tf.keras.Model):
-    def __init__(self, 
-                 accent_embedding_model=None,
-                 demographic_model=None,
-                 **kwargs):
-        super(MultiTaskPrototypicalNetwork, self).__init__(**kwargs)
-        
-        # Model untuk setiap task
-        self.accent_embedding = accent_embedding_model
-        self.demographic_embedding = demographic_model
-        
-        # Heads untuk output
-        self.age_head = tf.keras.layers.Dense(1, activation='relu', name='age_output')
-        self.gender_head = tf.keras.layers.Dense(2, activation='softmax', name='gender_output')
-        
-    def call(self, inputs, training=False):
-        # Unpack inputs: [accent_features, demographic_features]
-        accent_features = inputs[0]
-        demo_features = inputs[1]
-        
-        # Task 1: Aksen (embedding untuk prototypical)
-        accent_embeddings = self.accent_embedding(accent_features)
-        
-        # Task 2: Demografik (usia & gender)
-        demo_embeddings = self.demographic_embedding(demo_features)
-        
-        # Output predictions
-        age_pred = self.age_head(demo_embeddings)
-        gender_pred = self.gender_head(demo_embeddings)
-        
-        return accent_embeddings, age_pred, gender_pred
-    
+class PrototypicalNetwork(tf.keras.Model):
+    def __init__(self, embedding_model=None, **kwargs):
+        super(PrototypicalNetwork, self).__init__(**kwargs)
+        self.embedding = embedding_model
+
+    def call(self, support_set, query_set, support_labels, n_way, training=False):
+        # Memastikan input dalam bentuk tensor
+        support_set = tf.convert_to_tensor(support_set, dtype=tf.float32)
+        query_set = tf.convert_to_tensor(query_set, dtype=tf.float32)
+        support_labels = tf.convert_to_tensor(support_labels, dtype=tf.int32)
+
+        # Mendapatkan embedding fitur
+        support_embeddings = self.embedding(support_set)
+        query_embeddings = self.embedding(query_set)
+
+        # Kalkulasi Prototype per kelas aksen
+        prototypes = []
+        for i in range(n_way):
+            mask = tf.equal(support_labels, i)
+            class_embeddings = tf.boolean_mask(support_embeddings, mask)
+            
+            if tf.shape(class_embeddings)[0] == 0:
+                prototype = tf.zeros_like(support_embeddings[0])
+            else:
+                prototype = tf.reduce_mean(class_embeddings, axis=0)
+            prototypes.append(prototype)
+
+        prototypes = tf.stack(prototypes)
+
+        # Kalkulasi jarak Euclidean
+        distances = tf.norm(
+            tf.expand_dims(query_embeddings, 1) - tf.expand_dims(prototypes, 0),
+            axis=2
+        )
+        return -distances
+
     def get_config(self):
         config = super().get_config()
-        config.update({
-            "accent_embedding_model": tf.keras.layers.serialize(self.accent_embedding),
-            "demographic_model": tf.keras.layers.serialize(self.demographic_embedding)
-        })
+        if self.embedding:
+            config.update({"embedding_model": tf.keras.layers.serialize(self.embedding)})
         return config
 
 # ==========================================================
-# 3. FUNGSI EKSTRAKSI FITUR MULTI-TASK
+# 2. FUNGSI EKSTRAKSI MFCC 3-CHANNEL
 # ==========================================================
-def extract_multitask_features(file_path, sr=22050, n_mfcc=40, max_len=174):
-    """Ekstrak fitur untuk semua tasks: aksen, usia, gender"""
+def extract_mfcc_3channel(file_path, sr=22050, n_mfcc=40, max_len=174):
     try:
-        # Load audio
         y, sr = librosa.load(file_path, sr=sr)
         y = librosa.util.normalize(y)
-        
-        # 1. FITUR UNTUK AKSEN (MFCC 3-channel)
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc, n_fft=2048, hop_length=512)
         delta = librosa.feature.delta(mfcc)
         delta2 = librosa.feature.delta(mfcc, order=2)
-        
-        # Padding atau truncating
+
         if mfcc.shape[1] < max_len:
             pad_width = max_len - mfcc.shape[1]
             mfcc = np.pad(mfcc, ((0, 0), (0, pad_width)), mode='constant')
@@ -140,757 +72,341 @@ def extract_multitask_features(file_path, sr=22050, n_mfcc=40, max_len=174):
             delta2 = np.pad(delta2, ((0, 0), (0, pad_width)), mode='constant')
         else:
             mfcc, delta, delta2 = mfcc[:, :max_len], delta[:, :max_len], delta2[:, :max_len]
-        
-        accent_features = np.stack([mfcc, delta, delta2], axis=-1)  # (40, 174, 3)
-        
-        # 2. FITUR UNTUK DEMOGRAFIK (usia & gender)
-        # Statistik MFCC
-        mfcc_mean = np.mean(mfcc, axis=1)
-        mfcc_std = np.std(mfcc, axis=1)
-        mfcc_skew = pd.Series(mfcc.flatten()).skew()
-        mfcc_kurt = pd.Series(mfcc.flatten()).kurtosis()
-        
-        # Fitur temporal
-        rms = librosa.feature.rms(y=y).mean()
-        zcr = librosa.feature.zero_crossing_rate(y=y).mean()
-        spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr).mean()
-        spectral_bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr).mean()
-        
-        # Fitur pitch untuk gender
-        pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
-        pitch_values = pitches[magnitudes > np.max(magnitudes) * 0.1]
-        pitch_mean = np.mean(pitch_values) if len(pitch_values) > 0 else 0
-        pitch_std = np.std(pitch_values) if len(pitch_values) > 0 else 0
-        
-        # Formants (untuk gender)
-        try:
-            # Menggunakan LPC untuk estimasi formants
-            lpc_coeff = librosa.lpc(y, order=8)
-            roots = np.roots(lpc_coeff)
-            roots = roots[np.imag(roots) >= 0]
-            angz = np.arctan2(np.imag(roots), np.real(roots))
-            formants = angz * (sr / (2 * np.pi))
-            formants = np.sort(formants)
-            f1 = formants[0] if len(formants) > 0 else 0
-            f2 = formants[1] if len(formants) > 1 else 0
-        except:
-            f1, f2 = 0, 0
-        
-        # Gabungkan semua fitur demografik
-        demographic_features = np.array([
-            *mfcc_mean[:10],  # Ambil 10 pertama
-            mfcc_std.mean(),
-            mfcc_skew,
-            mfcc_kurt,
-            rms,
-            zcr,
-            spectral_centroid,
-            spectral_bandwidth,
-            pitch_mean,
-            pitch_std,
-            f1,
-            f2,
-            len(y) / sr  # durasi
-        ])
-        
-        # 3. FITUR TAMBAHAN UNTUK ANALISIS
-        analysis_features = {
-            'duration': len(y) / sr,
-            'energy': rms,
-            'pitch_mean': pitch_mean,
-            'pitch_std': pitch_std,
-            'zcr': zcr,
-            'spectral_centroid': spectral_centroid
-        }
-        
-        return accent_features, demographic_features, analysis_features
-        
+
+        return np.stack([mfcc, delta, delta2], axis=-1)
     except Exception as e:
-        st.error(f"Error dalam ekstraksi fitur: {e}")
-        return None, None, None
+        st.error(f"Gagal memproses audio: {e}")
+        return None
 
 # ==========================================================
-# 4. LOAD MODEL & RESOURCES
+# 3. LOADING MODEL & SUPPORT SET ASLI
 # ==========================================================
 @st.cache_resource
-def load_resources():
-    """Memuat semua resources yang diperlukan"""
-    resources = {
-        'model': None,
-        'support_set': None,
-        'support_labels': None,
-        'scaler': None,
-        'label_encoder': None,
-        'config': None
-    }
+def load_model_and_support_set():
+    """Memuat model dan support set yang sesungguhnya dari training"""
+    model_path = "model_detect_aksen.keras"
+    support_set_path = "support_set.npy"
+    support_labels_path = "support_labels.npy"
     
-    # Daftar file yang diperlukan
-    required_files = {
-        'model': 'multitask_model.keras',
-        'support_set': 'support_set.npy',
-        'support_labels': 'support_labels.npy',
-        'scaler': 'demographic_scaler.pkl',
-        'config': 'model_config.json'
-    }
-    
-    # Cek file yang ada
+    # Cek keberadaan file
     missing_files = []
-    for key, filename in required_files.items():
-        if not os.path.exists(filename):
-            missing_files.append(filename)
+    if not os.path.exists(model_path):
+        missing_files.append("model_detect_aksen.keras")
+    if not os.path.exists(support_set_path):
+        missing_files.append("support_set.npy")
+    if not os.path.exists(support_labels_path):
+        missing_files.append("support_labels.npy")
     
     if missing_files:
-        st.warning(f"⚠️ File berikut tidak ditemukan: {', '.join(missing_files)}")
+        st.error(f"File berikut tidak ditemukan: {', '.join(missing_files)}")
+        st.info("""
+        **Solusi:**
+        1. Pastikan file-file berikut ada di direktori yang sama:
+           - model_detect_aksen.keras (model hasil training)
+           - support_set.npy (support set dari training)
+           - support_labels.npy (labels dari training)
         
-        # Buat resources dummy untuk testing
-        if st.checkbox("Gunakan mode demo dengan data dummy?"):
-            st.info("Membuat model dan data dummy untuk testing...")
-            
-            # Buat model dummy
-            accent_embedding = tf.keras.Sequential([
-                tf.keras.layers.Input(shape=(40, 174, 3)),
-                tf.keras.layers.Conv2D(32, (3, 3), activation='relu'),
-                tf.keras.layers.MaxPooling2D((2, 2)),
-                tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
-                tf.keras.layers.MaxPooling2D((2, 2)),
-                tf.keras.layers.Flatten(),
-                tf.keras.layers.Dense(128, activation='relu')
-            ])
-            
-            demographic_model = tf.keras.Sequential([
-                tf.keras.layers.Input(shape=(25,)),  # 25 fitur demografik
-                tf.keras.layers.Dense(64, activation='relu'),
-                tf.keras.layers.Dropout(0.3),
-                tf.keras.layers.Dense(32, activation='relu')
-            ])
-            
-            model = MultiTaskPrototypicalNetwork(
-                accent_embedding_model=accent_embedding,
-                demographic_model=demographic_model
-            )
-            
-            # Buat support set dummy
-            resources['support_set'] = np.random.randn(15, 40, 174, 3).astype(np.float32) * 0.1
-            resources['support_labels'] = np.random.choice([0, 1, 2, 3, 4], size=15)
-            
-            # Buat scaler dummy
-            class DummyScaler:
-                def transform(self, X):
-                    return X
-            resources['scaler'] = DummyScaler()
-            
-            resources['label_encoder'] = {
-                0: "Sunda", 1: "Jawa Tengah", 2: "Jawa Timur", 
-                3: "Yogyakarta", 4: "Betawi"
-            }
-            
-            resources['model'] = model
-            st.success("Mode demo aktif! Hasil adalah prediksi dummy.")
-            return resources
-            
-        return None
+        2. Jika belum ada support_set.npy, buat dari skrip training dengan:
+           ```python
+           np.save('support_set.npy', support_set_used_in_training)
+           np.save('support_labels.npy', support_labels_used_in_training)
+           ```
+        """)
+        return None, None, None, None
     
     try:
-        # 1. Load model
-        custom_objects = {"MultiTaskPrototypicalNetwork": MultiTaskPrototypicalNetwork}
-        model = tf.keras.models.load_model('multitask_model.keras', 
-                                          custom_objects=custom_objects,
-                                          compile=False)
-        model.compile(optimizer='adam', loss='mse')
-        resources['model'] = model
+        # Load model
+        custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects, compile=False)
         
-        # 2. Load support set
-        support_set = np.load('support_set.npy', allow_pickle=True)
-        support_labels = np.load('support_labels.npy', allow_pickle=True)
+        # Load support set asli dari training
+        support_set = np.load(support_set_path, allow_pickle=True)
+        support_labels = np.load(support_labels_path, allow_pickle=True)
+        
+        # Pastikan support_set adalah array numpy
+        if not isinstance(support_set, np.ndarray):
+            support_set = np.array(support_set)
+        if not isinstance(support_labels, np.ndarray):
+            support_labels = np.array(support_labels)
         
         # Validasi shape
-        if support_set.shape[1:] != (40, 174, 3):
-            st.error(f"Shape support set tidak valid: {support_set.shape}")
-            return None
+        expected_shape = (None, 40, 174, 3)
+        if len(support_set.shape) != 4 or support_set.shape[1:] != expected_shape[1:]:
+            st.error(f"Shape support set tidak valid: {support_set.shape}. Diharapkan: {expected_shape}")
+            return None, None, None, None
         
-        resources['support_set'] = support_set
-        resources['support_labels'] = support_labels
+        # Hitung n_way (jumlah kelas unik)
+        n_way = len(np.unique(support_labels))
         
-        # 3. Load scaler untuk fitur demografik
-        with open('demographic_scaler.pkl', 'rb') as f:
-            resources['scaler'] = pickle.load(f)
-        
-        # 4. Load label encoder (atau buat mapping)
-        resources['label_encoder'] = {
-            0: "Sunda", 1: "Jawa Tengah", 2: "Jawa Timur", 
-            3: "Yogyakarta", 4: "Betawi"
+        # Mendapatkan mapping label ke nama aksen
+        # Asumsi: support_labels sudah encoded sebagai 0, 1, 2, ...
+        label_mapping = {
+            0: "Sunda",
+            1: "Jawa Tengah", 
+            2: "Jawa Timur",
+            3: "Yogyakarta",
+            4: "Betawi"
         }
         
-        st.success("✅ Semua resources berhasil dimuat!")
-        return resources
+        # Buat list aksen berdasarkan n_way
+        aksen_list = [label_mapping.get(i, f"Aksen_{i}") for i in range(n_way)]
+        
+        st.success(f"✅ Model dan support set berhasil dimuat!")
+        st.success(f"   • Jumlah kelas: {n_way}")
+        st.success(f"   • Jumlah sample support: {len(support_set)}")
+        st.success(f"   • Shape support set: {support_set.shape}")
+        
+        return model, support_set, support_labels, aksen_list
         
     except Exception as e:
-        st.error(f"❌ Error loading resources: {str(e)}")
-        if st.checkbox("Tampilkan traceback error"):
+        st.error(f"Error saat memuat resources: {str(e)}")
+        if st.checkbox("Tampilkan detail error"):
             st.code(traceback.format_exc())
-        return None
+        return None, None, None, None
 
 # ==========================================================
-# 5. FUNGSI PREDIKSI MULTI-TASK
+# 4. FUNGSI INFERENCE
 # ==========================================================
-def predict_multitask(resources, audio_path, user_info=None):
-    """Melakukan prediksi multi-task: aksen, usia, gender"""
-    
-    if resources is None:
-        return None
-    
+def predict_accent(model, support_set, support_labels, query_feat, n_way):
+    """Melakukan prediksi aksen menggunakan prototypical network"""
     try:
-        # 1. Ekstrak fitur
-        accent_feat, demo_feat, analysis_feat = extract_multitask_features(audio_path)
+        # Siapkan query tensor
+        query_tensor = np.expand_dims(query_feat, axis=0)
         
-        if accent_feat is None:
+        # Validasi shape
+        if query_tensor.shape[1:] != support_set.shape[1:]:
+            st.error(f"Shape tidak cocok! Query: {query_tensor.shape}, Support: {support_set.shape}")
             return None
         
-        # 2. Normalisasi fitur demografik
-        demo_feat_scaled = resources['scaler'].transform(demo_feat.reshape(1, -1))
-        
-        # 3. Siapkan input untuk model
-        accent_input = np.expand_dims(accent_feat, axis=0)  # (1, 40, 174, 3)
-        demo_input = demo_feat_scaled  # (1, n_features)
-        
-        # 4. Prediksi menggunakan model
-        accent_embeddings, age_pred, gender_pred = resources['model'](
-            [accent_input, demo_input], 
-            training=False
+        # Lakukan inference
+        logits = model.call(
+            support_set,      # support set asli
+            query_tensor,     # query audio
+            support_labels,   # labels support set
+            n_way,            # jumlah kelas
+            training=False    # mode inference
         )
         
-        # 5. Prototypical matching untuk aksen
-        support_embeddings = resources['model'].accent_embedding(resources['support_set'])
+        # Konversi ke numpy jika perlu
+        if hasattr(logits, 'numpy'):
+            logits = logits.numpy()
         
-        # Hitung jarak ke prototype setiap kelas
-        n_way = len(resources['label_encoder'])
-        distances = []
-        
-        for i in range(n_way):
-            mask = resources['support_labels'] == i
-            if np.any(mask):
-                class_embeddings = support_embeddings[mask]
-                prototype = tf.reduce_mean(class_embeddings, axis=0)
-                distance = tf.norm(accent_embeddings[0] - prototype)
-                distances.append(distance.numpy())
-            else:
-                distances.append(1000)  # nilai besar jika kelas tidak ada
-        
-        # Konversi distance ke similarity score
-        distances = np.array(distances)
-        epsilon = 1e-10
-        similarities = 1 / (distances + epsilon)
-        similarities = similarities / similarities.sum()  # normalisasi ke probabilitas
-        
-        # Prediksi aksen
-        accent_idx = np.argmax(similarities)
-        accent_confidence = similarities[accent_idx] * 100
-        
-        # 6. Process usia dan gender predictions
-        age_value = float(age_pred.numpy()[0][0])
-        
-        # Adjust age jika ada info dari user
-        if user_info and 'usia' in user_info:
-            user_age = user_info['usia']
-            # Weighted average antara prediksi model dan input user
-            age_value = (age_value * 0.7) + (user_age * 0.3)
-        
-        gender_probs = gender_pred.numpy()[0]
-        gender_idx = np.argmax(gender_probs)
-        gender_confidence = gender_probs[gender_idx] * 100
-        gender_label = "Laki-laki" if gender_idx == 0 else "Perempuan"
-        
-        # Adjust gender jika ada info dari user
-        if user_info and 'gender' in user_info:
-            if user_info['gender'] == "Laki-laki" and gender_label == "Perempuan":
-                gender_confidence *= 0.8  # Kurangi confidence jika berbeda
-            elif user_info['gender'] == "Perempuan" and gender_label == "Laki-laki":
-                gender_confidence *= 0.8
-        
-        # 7. Hitung confidence usia (semakin dekat dengan rata-rata, semakin tinggi)
-        # Asumsi usia normal 20-60 tahun
-        age_confidence = 100 - min(50, abs(age_value - 40) * 2)
-        age_confidence = max(30, age_confidence)  # Minimum 30%
-        
-        # 8. Return results
-        return {
-            'accent': {
-                'prediction': accent_idx,
-                'label': resources['label_encoder'][accent_idx],
-                'probabilities': similarities,
-                'confidence': float(accent_confidence)
-            },
-            'age': {
-                'prediction': int(round(age_value)),
-                'confidence': float(age_confidence),
-                'raw': float(age_value)
-            },
-            'gender': {
-                'prediction': gender_label,
-                'confidence': float(gender_confidence),
-                'probabilities': gender_probs.tolist()
-            },
-            'analysis': analysis_feat,
-            'features': {
-                'accent_shape': accent_feat.shape,
-                'demo_features': len(demo_feat)
-            },
-            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
+        return logits[0]  # Return logits untuk satu sample query
         
     except Exception as e:
         st.error(f"Error dalam prediksi: {str(e)}")
         return None
 
 # ==========================================================
-# 6. FUNGSI VISUALISASI
-# ==========================================================
-def create_visualizations(results):
-    """Membuat visualisasi untuk hasil prediksi"""
-    visualizations = {}
-    
-    try:
-        # 1. Bar chart untuk probabilitas aksen
-        accent_labels = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
-        accent_probs = results['accent']['probabilities']
-        
-        fig_accents = go.Figure(data=[
-            go.Bar(
-                x=accent_labels,
-                y=accent_probs * 100,
-                marker_color=['#3B82F6' if i == results['accent']['prediction'] 
-                             else '#9CA3AF' for i in range(len(accent_labels))],
-                text=[f'{p*100:.1f}%' for p in accent_probs],
-                textposition='auto',
-            )
-        ])
-        
-        fig_accents.update_layout(
-            title="Probabilitas Aksen",
-            xaxis_title="Aksen",
-            yaxis_title="Probabilitas (%)",
-            yaxis_range=[0, 100],
-            template="plotly_white"
-        )
-        visualizations['accent_chart'] = fig_accents
-        
-        # 2. Gauge chart untuk confidence
-        fig_gauges = make_subplots(
-            rows=1, cols=3,
-            subplot_titles=('Aksen', 'Usia', 'Gender'),
-            specs=[[{'type': 'indicator'}, {'type': 'indicator'}, {'type': 'indicator'}]]
-        )
-        
-        # Gauge aksen
-        fig_gauges.add_trace(
-            go.Indicator(
-                mode="gauge+number",
-                value=results['accent']['confidence'],
-                title={'text': "Confidence"},
-                domain={'row': 0, 'column': 0},
-                gauge={
-                    'axis': {'range': [0, 100]},
-                    'bar': {'color': "#3B82F6"},
-                    'steps': [
-                        {'range': [0, 50], 'color': "lightgray"},
-                        {'range': [50, 80], 'color': "gray"},
-                        {'range': [80, 100], 'color': "darkgray"}
-                    ],
-                    'threshold': {
-                        'line': {'color': "red", 'width': 4},
-                        'thickness': 0.75,
-                        'value': 90
-                    }
-                }
-            ),
-            row=1, col=1
-        )
-        
-        # Gauge usia
-        fig_gauges.add_trace(
-            go.Indicator(
-                mode="gauge+number",
-                value=results['age']['confidence'],
-                title={'text': "Confidence"},
-                domain={'row': 0, 'column': 1},
-                gauge={
-                    'axis': {'range': [0, 100]},
-                    'bar': {'color': "#10B981"},
-                    'steps': [
-                        {'range': [0, 50], 'color': "lightgray"},
-                        {'range': [50, 80], 'color': "gray"},
-                        {'range': [80, 100], 'color': "darkgray"}
-                    ]
-                }
-            ),
-            row=1, col=2
-        )
-        
-        # Gauge gender
-        fig_gauges.add_trace(
-            go.Indicator(
-                mode="gauge+number",
-                value=results['gender']['confidence'],
-                title={'text': "Confidence"},
-                domain={'row': 0, 'column': 2},
-                gauge={
-                    'axis': {'range': [0, 100]},
-                    'bar': {'color': "#8B5CF6"},
-                    'steps': [
-                        {'range': [0, 50], 'color': "lightgray"},
-                        {'range': [50, 80], 'color': "gray"},
-                        {'range': [80, 100], 'color': "darkgray"}
-                    ]
-                }
-            ),
-            row=1, col=3
-        )
-        
-        fig_gauges.update_layout(height=300, margin=dict(t=50, b=10))
-        visualizations['confidence_gauges'] = fig_gauges
-        
-        # 3. Radar chart untuk fitur audio
-        if 'analysis' in results:
-            analysis = results['analysis']
-            features = ['Energy', 'Pitch Mean', 'Pitch Var', 'ZCR', 'Spectral Centroid']
-            values = [
-                analysis['energy'] * 100,
-                min(100, analysis['pitch_mean'] / 5),
-                min(100, analysis['pitch_std'] * 10),
-                analysis['zcr'] * 1000,
-                min(100, analysis['spectral_centroid'] / 100)
-            ]
-            
-            fig_radar = go.Figure(data=go.Scatterpolar(
-                r=values,
-                theta=features,
-                fill='toself',
-                line_color='#F59E0B'
-            ))
-            
-            fig_radar.update_layout(
-                polar=dict(
-                    radialaxis=dict(
-                        visible=True,
-                        range=[0, 100]
-                    )),
-                showlegend=False,
-                title="Analisis Fitur Audio",
-                height=300
-            )
-            visualizations['radar_chart'] = fig_radar
-        
-        # 4. Gender probability pie chart
-        gender_labels = ['Laki-laki', 'Perempuan']
-        gender_probs = results['gender']['probabilities']
-        
-        fig_gender = go.Figure(data=[go.Pie(
-            labels=gender_labels,
-            values=gender_probs,
-            hole=.3,
-            marker_colors=['#3B82F6', '#EC4899']
-        )])
-        
-        fig_gender.update_layout(
-            title="Probabilitas Gender",
-            height=300
-        )
-        visualizations['gender_pie'] = fig_gender
-        
-    except Exception as e:
-        st.warning(f"Tidak dapat membuat visualisasi: {e}")
-    
-    return visualizations
-
-# ==========================================================
-# 7. FUNGSI UTAMA STREAMLIT
+# 5. ANTARMUKA UTAMA
 # ==========================================================
 def main():
-    # Header
-    st.markdown('<h1 class="main-header">🎙️ Sistem Analisis Suara Multi-Task</h1>', unsafe_allow_html=True)
+    st.set_page_config(
+        page_title="Sistem Deteksi Aksen Bahasa Indonesia",
+        page_icon="🎙️",
+        layout="centered"
+    )
+    
+    st.title("🎙️ Sistem Deteksi Aksen Bahasa Indonesia")
     st.markdown("""
-    <div style='text-align: center; color: #6B7280; margin-bottom: 2rem;'>
-    Deteksi aksen bahasa Indonesia, estimasi usia, dan identifikasi gender dari rekaman suara
-    </div>
-    """, unsafe_allow_html=True)
+    Sistem ini menggunakan **Prototypical Network** untuk mengidentifikasi aksen bahasa Indonesia 
+    berdasarkan rekaman suara. Model membandingkan audio input dengan support set dari 5 aksen utama.
+    """)
+    st.markdown("---")
     
-    # Sidebar
+    # Sidebar untuk informasi dan konfigurasi
     with st.sidebar:
-        st.markdown("### ⚙️ Konfigurasi")
+        st.header("⚙️ Konfigurasi")
+        debug_mode = st.checkbox("Mode Debug", value=False)
         
-        # Mode operasi
-        app_mode = st.radio(
-            "Pilih Mode:",
-            ["Analisis Audio", "Info Model", "Panduan Penggunaan"]
-        )
+        st.header("ℹ️ Informasi Pembicara")
+        usia = st.number_input("Usia", min_value=5, max_value=100, value=30, step=1)
+        gender = st.selectbox("Jenis Kelamin", ["Laki-laki", "Perempuan", "Lainnya"])
+        provinsi = st.selectbox("Asal Provinsi", [
+            "DKI Jakarta", "Jawa Barat", "Jawa Tengah", 
+            "Jawa Timur", "DI Yogyakarta", "Banten", "Lainnya"
+        ])
         
-        if app_mode == "Analisis Audio":
-            st.markdown("---")
-            st.markdown("### 👤 Informasi Pembicara")
-            
-            # Input informasi pembicara
-            col1, col2 = st.columns(2)
-            with col1:
-                usia = st.number_input("Usia", min_value=5, max_value=100, value=30, step=1)
-            with col2:
-                gender = st.selectbox("Gender", ["Laki-laki", "Perempuan"])
-            
-            provinsi = st.selectbox("Provinsi Asal", [
-                "DKI Jakarta", "Jawa Barat", "Jawa Tengah", 
-                "Jawa Timur", "DI Yogyakarta", "Banten", "Lainnya"
-            ])
-            
-            st.markdown("---")
-            st.markdown("### 🔧 Pengaturan Lanjutan")
-            debug_mode = st.checkbox("Mode Debug", value=False)
-            save_results = st.checkbox("Simpan Hasil Analisis", value=False)
-            
-            user_info = {
-                'usia': usia,
-                'gender': gender,
-                'provinsi': provinsi
-            }
+        st.markdown("---")
+        st.header("📊 Info Model")
+        if st.button("ℹ️ Tampilkan Info Model"):
+            st.info("""
+            **Arsitektur Model:**
+            - Prototypical Network
+            - Input: MFCC 3-channel (40, 174, 3)
+            - Embedding: CNN-based feature extractor
+            - Jumlah kelas: 5 aksen utama
+            """)
     
-    # Load resources sekali di awal
-    if 'resources' not in st.session_state:
-        with st.spinner("Memuat model dan resources..."):
-            st.session_state.resources = load_resources()
+    # Load model dan support set
+    with st.spinner("Memuat model dan support set..."):
+        model, support_set, support_labels, aksen_list = load_model_and_support_set()
     
-    resources = st.session_state.resources
+    if model is None:
+        st.error("Tidak dapat melanjutkan tanpa model dan support set yang valid.")
+        st.stop()
     
-    # Main content berdasarkan mode
-    if app_mode == "Analisis Audio":
-        if resources is None:
-            st.error("Tidak dapat memuat resources yang diperlukan.")
-            if st.button("Coba Muat Ulang"):
-                st.session_state.resources = load_resources()
-                st.rerun()
-            return
+    # Debug information
+    if debug_mode:
+        with st.expander("🔍 Debug Information", expanded=False):
+            st.write(f"**Model Info:**")
+            st.write(f"- Type: {type(model)}")
+            st.write(f"- Embedding model: {model.embedding}")
+            
+            st.write(f"\n**Support Set Info:**")
+            st.write(f"- Shape: {support_set.shape}")
+            st.write(f"- Min value: {support_set.min():.4f}")
+            st.write(f"- Max value: {support_set.max():.4f}")
+            st.write(f"- Mean: {support_set.mean():.4f}")
+            
+            st.write(f"\n**Support Labels:**")
+            st.write(f"- Shape: {support_labels.shape}")
+            st.write(f"- Unique labels: {np.unique(support_labels)}")
+            st.write(f"- Label distribution:")
+            unique, counts = np.unique(support_labels, return_counts=True)
+            for label, count in zip(unique, counts):
+                st.write(f"  - {aksen_list[label] if label < len(aksen_list) else label}: {count} samples")
+    
+    # Bagian utama: Upload audio
+    st.subheader("📤 Upload Audio")
+    st.markdown("""
+    **Format yang didukung:** WAV (16-bit PCM, mono/stereo, 22.05kHz recommended)
+    **Durasi optimal:** 3-10 detik
+    """)
+    
+    audio_file = st.file_uploader(
+        "Pilih file audio WAV",
+        type=["wav"],
+        help="Upload file audio dalam format WAV"
+    )
+    
+    if audio_file is not None:
+        # Tampilkan audio player
+        st.audio(audio_file, format="audio/wav")
         
-        # Upload section
-        st.markdown('<h2 class="sub-header">📤 Upload Audio untuk Analisis</h2>', unsafe_allow_html=True)
-        
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            audio_file = st.file_uploader(
-                "Pilih file audio (.wav)",
-                type=["wav", "mp3"],
-                help="Format yang disarankan: WAV 16-bit, 22.05kHz"
+        # Tombol analisis
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            analyze_button = st.button(
+                "🔍 Analisis Aksen",
+                type="primary",
+                use_container_width=True
             )
         
-        with col2:
-            st.markdown("""
-            **Format optimal:**
-            - WAV, 16-bit PCM
-            - 22.05 kHz sample rate
-            - Mono channel
-            - Durasi: 3-10 detik
-            """)
-        
-        if audio_file is not None:
-            # Display audio player
-            st.audio(audio_file, format="audio/wav")
-            
-            # Tombol analisis
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                analyze_btn = st.button(
-                    "🚀 Mulai Analisis Multi-Task",
-                    type="primary",
-                    use_container_width=True,
-                    disabled=audio_file is None
-                )
-            
-            if analyze_btn:
-                with st.spinner("Melakukan analisis multi-task..."):
-                    try:
-                        # Save temporary file
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-                            tmp_file.write(audio_file.getbuffer())
-                            tmp_path = tmp_file.name
-                        
-                        # Perform prediction
-                        results = predict_multitask(resources, tmp_path, user_info)
-                        
-                        if results is None:
-                            st.error("Gagal melakukan analisis.")
-                            os.unlink(tmp_path)
-                            return
-                        
-                        # Save to session state
-                        st.session_state.last_results = results
-                        st.session_state.audio_file = audio_file.name
-                        
-                        # Cleanup
+        if analyze_button:
+            with st.spinner("Memproses audio..."):
+                try:
+                    # Simpan file audio sementara
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                        tmp_file.write(audio_file.getbuffer())
+                        tmp_path = tmp_file.name
+                    
+                    # Ekstrak fitur MFCC
+                    query_features = extract_mfcc_3channel(tmp_path)
+                    
+                    if query_features is None:
+                        st.error("Gagal mengekstrak fitur dari audio.")
                         os.unlink(tmp_path)
-                        
-                        # Display results
-                        st.markdown("---")
-                        st.markdown('<h2 class="sub-header">📊 Hasil Analisis Multi-Task</h2>', unsafe_allow_html=True)
-                        
-                        # Results cards
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            with st.container():
-                                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                                st.metric(
-                                    label="🎯 **Aksen Terdeteksi**",
-                                    value=results['accent']['label'],
-                                    delta=f"{results['accent']['confidence']:.1f}% confidence"
-                                )
-                                st.caption(f"Prediction confidence: {results['accent']['confidence']:.1f}%")
-                                st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        with col2:
-                            with st.container():
-                                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                                st.metric(
-                                    label="👤 **Gender**",
-                                    value=results['gender']['prediction'],
-                                    delta=f"{results['gender']['confidence']:.1f}% confidence"
-                                )
-                                st.caption(f"Male: {results['gender']['probabilities'][0]*100:.1f}%, "
-                                         f"Female: {results['gender']['probabilities'][1]*100:.1f}%")
-                                st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        with col3:
-                            with st.container():
-                                st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                                st.metric(
-                                    label="📅 **Estimasi Usia**",
-                                    value=f"{results['age']['prediction']} tahun",
-                                    delta=f"{results['age']['confidence']:.1f}% confidence"
-                                )
-                                st.caption(f"Raw prediction: {results['age']['raw']:.1f} tahun")
-                                st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        # User information
-                        st.markdown('<div class="result-card">', unsafe_allow_html=True)
-                        st.markdown("### 👤 Informasi Pembicara yang Diinput")
-                        user_cols = st.columns(3)
-                        with user_cols[0]:
-                            st.info(f"**Usia:** {user_info['usia']} tahun")
-                        with user_cols[1]:
-                            st.info(f"**Gender:** {user_info['gender']}")
-                        with user_cols[2]:
-                            st.info(f"**Provinsi:** {user_info['provinsi']}")
-                        st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        # Visualizations
-                        st.markdown("---")
-                        st.markdown('<h3 class="sub-header">📈 Visualisasi Hasil</h3>', unsafe_allow_html=True)
-                        
-                        viz = create_visualizations(results)
-                        
-                        # Row 1: Accent probabilities and confidence gauges
-                        viz_col1, viz_col2 = st.columns([2, 1])
-                        with viz_col1:
-                            if 'accent_chart' in viz:
-                                st.plotly_chart(viz['accent_chart'], use_container_width=True)
-                        
-                        with viz_col2:
-                            if 'confidence_gauges' in viz:
-                                st.plotly_chart(viz['confidence_gauges'], use_container_width=True)
-                        
-                        # Row 2: Gender pie and radar chart
-                        viz_col3, viz_col4 = st.columns(2)
-                        with viz_col3:
-                            if 'gender_pie' in viz:
-                                st.plotly_chart(viz['gender_pie'], use_container_width=True)
-                        
-                        with viz_col4:
-                            if 'radar_chart' in viz:
-                                st.plotly_chart(viz['radar_chart'], use_container_width=True)
-                        
-                        # Detailed tables
-                        st.markdown("---")
-                        st.markdown('<h3 class="sub-header">📋 Detail Probabilitas</h3>', unsafe_allow_html=True)
-                        
-                        # Accent probabilities table
-                        accent_df = pd.DataFrame({
-                            'Aksen': ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"],
-                            'Probabilitas': results['accent']['probabilities'],
-                            'Persentase': [f"{p*100:.2f}%" for p in results['accent']['probabilities']]
-                        }).sort_values('Probabilitas', ascending=False)
-                        
-                        st.dataframe(
-                            accent_df,
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-                                "Aksen": st.column_config.TextColumn("Aksen"),
-                                "Probabilitas": st.column_config.ProgressColumn(
-                                    "Probabilitas",
-                                    format="%.3f",
-                                    min_value=0,
-                                    max_value=1
-                                ),
-                                "Persentase": st.column_config.TextColumn("Persentase")
-                            }
+                        return
+                    
+                    # Debug: tampilkan shape fitur
+                    if debug_mode:
+                        st.info(f"Shape fitur audio: {query_features.shape}")
+                    
+                    # Lakukan prediksi
+                    n_way = len(aksen_list)
+                    logits = predict_accent(model, support_set, support_labels, query_features, n_way)
+                    
+                    if logits is None:
+                        st.error("Gagal melakukan prediksi.")
+                        os.unlink(tmp_path)
+                        return
+                    
+                    # Hitung probabilitas
+                    probabilities = tf.nn.softmax(logits).numpy()
+                    predicted_idx = np.argmax(probabilities)
+                    confidence = probabilities[predicted_idx] * 100
+                    
+                    # Tampilkan hasil
+                    st.markdown("---")
+                    st.subheader("📊 Hasil Analisis")
+                    
+                    # Hasil utama dengan visual
+                    col1, col2 = st.columns([1, 2])
+                    with col1:
+                        st.metric(
+                            label="🎯 Aksen Terdeteksi",
+                            value=aksen_list[predicted_idx],
+                            delta=f"{confidence:.1f}% confidence"
                         )
-                        
-                        # Technical details (debug mode)
-                        if debug_mode:
-                            st.markdown("---")
-                            st.markdown('<h3 class="sub-header">🔍 Informasi Teknis</h3>', unsafe_allow_html=True)
-                            
-                            with st.expander("Detail Fitur dan Hasil", expanded=False):
-                                st.json({
-                                    'timestamp': results['timestamp'],
-                                    'accent_features_shape': str(results['features']['accent_shape']),
-                                    'demographic_features_count': results['features']['demo_features'],
-                                    'analysis_features': results['analysis']
-                                })
-                        
-                        # Save results option
-                        if save_results:
-                            st.markdown("---")
-                            st.markdown('<h3 class="sub-header">💾 Simpan Hasil</h3>', unsafe_allow_html=True)
-                            
-                            result_data = {
-                                'audio_file': audio_file.name,
-                                'timestamp': results['timestamp'],
-                                'user_info': user_info,
-                                'predictions': {
-                                    'accent': results['accent'],
-                                    'age': results['age'],
-                                    'gender': results['gender']
-                                }
-                            }
-                            
-                            # Convert to JSON for download
-                            import json
-                            result_json = json.dumps(result_data, indent=2, default=str)
-                            
-                            st.download_button(
-                                label="📥 Download Hasil (JSON)",
-                                data=result_json,
-                                file_name=f"analisis_suara_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                                mime="application/json"
-                            )
-                        
-                    except Exception as e:
-                        st.error(f"Error selama analisis: {str(e)}")
-                        if debug_mode:
-                            st.code(traceback.format_exc())
-    
-    elif app_mode == "Info Model":
-        st.markdown('<h2 class="sub-header">ℹ️ Informasi Model</h2>', unsafe_allow_html=True)
-        
-        st.markdown("""
-        ### Arsitektur Model Multi-Task
-        
-        Model ini menggunakan pendekatan **Multi-Task Learning** dengan arsitektur sebagai berikut:
-        
-        #### 1. **Task Aksen (Prototypical Network)**
-        - **Input:** MFCC 3-channel (40 coefficients × 174 frames × 3 channels)
-        - **Feature Extractor:** CNN dengan 2 layer convolutional
-        - **Output:** Embedding vector untuk prototypical matching
-        
-        #### 2. **Task Demografik (Usia & Gender)**
-        - **Input:** 25 fitur audio (statistik MFCC, pitch, formants, dll)
-        - **Feature Extractor:** MLP dengan 2 layer fully connected
-        - **Outputs:**
-          - Usia: Regresi (single neuron dengan aktivasi ReLU)
-          - Gender: Klasifikasi biner (
+                    with col2:
+                        # Progress bar untuk confidence
+                        st.progress(float(confidence/100))
+                        st.caption(f"Tingkat keyakinan: {confidence:.2f}%")
+                    
+                    # Informasi pembicara
+                    st.markdown("---")
+                    st.subheader("👤 Informasi Pembicara")
+                    info_cols = st.columns(3)
+                    with info_cols[0]:
+                        st.metric("Usia", usia)
+                    with info_cols[1]:
+                        st.metric("Jenis Kelamin", gender)
+                    with info_cols[2]:
+                        st.metric("Asal Provinsi", provinsi)
+                    
+                    # Detail probabilitas semua kelas
+                    st.markdown("---")
+                    st.subheader("📈 Probabilitas per Aksen")
+                    
+                    # Buat dataframe untuk probabilitas
+                    prob_df = pd.DataFrame({
+                        "Aksen": aksen_list,
+                        "Probabilitas": probabilities,
+                        "Persentase": [f"{p*100:.2f}%" for p in probabilities]
+                    })
+                    
+                    # Urutkan berdasarkan probabilitas
+                    prob_df = prob_df.sort_values("Probabilitas", ascending=False)
+                    
+                    # Tampilkan tabel
+                    st.dataframe(
+                        prob_df[["Aksen", "Persentase", "Probabilitas"]],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Visualisasi bar chart
+                    st.bar_chart(
+                        prob_df.set_index("Aksen")["Probabilitas"],
+                        use_container_width=True
+                    )
+                    
+                    # Interpretasi hasil
+                    st.markdown("---")
+                    st.subheader("📝 Interpretasi")
+                    
+                    if confidence > 70:
+                        st.success(f"**Tingkat keyakinan tinggi** ({confidence:.1f}%). Audio memiliki karakteristik yang kuat menyerupai aksen **{aksen_list[predicted_idx]}**.")
+                    elif confidence > 40:
+                        st.warning(f"**Tingkat keyakinan sedang** ({confidence:.1f}%). Audio memiliki kemiripan dengan aksen **{aksen_list[predicted_idx]}**, namun ada kemungkinan pengaruh aksen lain.")
+                    else:
+                        st.info(f"**Tingkat keyakinan rendah** ({confidence:.1f}%). Karakteristik audio tidak jelas mendominasi satu aksen tertentu.")
+                    
+                    # Hapus file temporary
+                    os.unlink(tmp_path)
+                    
+                except Exception as e:
+                    st.error(f"Terjadi kesalahan: {str(e)}")
+                    if debug_mode:
+                        st.code(traceback.format_exc())
+                    
+                    # Cleanup jika ada file temporary
+                    if 'tmp_path' in locals() and os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+
+# ==========================================================
+# 6. RUN APPLICATION
+# ==========================================================
+if __name__ == "__main__":
+    main()
