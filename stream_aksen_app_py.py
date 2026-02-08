@@ -7,7 +7,46 @@ import os
 import tensorflow as tf
 
 # ==========================================================
-# 1. FUNGSI LOAD MODEL (REBUILD - TANPA PROTOTYPICAL CLASS)
+# 1. CLASS PROTOTYPICAL NETWORK
+# ==========================================================
+@tf.keras.utils.register_keras_serializable(package="Custom")
+class PrototypicalNetwork(tf.keras.Model):
+    def __init__(self, embedding_model=None, **kwargs):
+        super(PrototypicalNetwork, self).__init__(**kwargs)
+        self._embedding = embedding_model
+    
+    def call(self, inputs, training=None):
+        # Handle berbagai format input
+        if isinstance(inputs, (list, tuple)):
+            x = inputs[1] if len(inputs) > 1 else inputs[0]
+        elif isinstance(inputs, dict):
+            x = inputs.get('query_set', inputs.get('inputs', inputs))
+        else:
+            x = inputs
+        
+        # Gunakan embedding jika ada
+        if self._embedding is not None and callable(self._embedding):
+            return self._embedding(x, training=training)
+        
+        # Cari layer yang callable
+        for attr_name in ['embedding', '_embedding_layer', 'layers']:
+            if hasattr(self, attr_name):
+                attr = getattr(self, attr_name)
+                if callable(attr):
+                    try:
+                        return attr(x, training=training)
+                    except:
+                        pass
+        
+        # Return input as-is jika tidak ada layer
+        return x
+    
+    def get_config(self):
+        config = super().get_config()
+        return config
+
+# ==========================================================
+# 2. LOAD MODEL
 # ==========================================================
 @st.cache_resource
 def load_accent_model():
@@ -15,73 +54,36 @@ def load_accent_model():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     model_path = os.path.join(current_dir, model_name)
 
-    if os.path.exists(model_path):
-        try:
-            # STRATEGI 1: Load model original tanpa custom objects
-            try:
-                model = tf.keras.models.load_model(model_path, compile=False)
-                # Test prediksi dummy
-                dummy_input = np.random.rand(1, 40).astype(np.float32)
-                _ = model.predict(dummy_input, verbose=0)
-                st.success("✅ Model loaded successfully (original)")
-                return model
-            except Exception as e1:
-                st.warning(f"Load original failed: {str(e1)[:100]}")
-                
-                # STRATEGI 2: Ekstrak weights dan rebuild
-                try:
-                    # Buat model baru dengan arsitektur standar
-                    new_model = tf.keras.Sequential([
-                        tf.keras.layers.Input(shape=(40,)),
-                        tf.keras.layers.Dense(128, activation='relu', name='dense_1'),
-                        tf.keras.layers.Dropout(0.3, name='dropout_1'),
-                        tf.keras.layers.Dense(64, activation='relu', name='dense_2'),
-                        tf.keras.layers.Dropout(0.2, name='dropout_2'),
-                        tf.keras.layers.Dense(5, activation='softmax', name='output')
-                    ])
-                    
-                    new_model.compile(optimizer='adam', loss='categorical_crossentropy')
-                    
-                    # Load model lama untuk ekstrak weights
-                    old_model = tf.keras.models.load_model(model_path, compile=False)
-                    
-                    # Coba copy weights layer by layer
-                    if hasattr(old_model, 'layers'):
-                        for new_layer in new_model.layers:
-                            if hasattr(new_layer, 'get_weights'):
-                                try:
-                                    old_layer = old_model.get_layer(new_layer.name)
-                                    new_layer.set_weights(old_layer.get_weights())
-                                except:
-                                    pass
-                    
-                    st.success("✅ Model rebuilt successfully")
-                    return new_model
-                    
-                except Exception as e2:
-                    st.error(f"Rebuild failed: {str(e2)[:100]}")
-                    
-                    # STRATEGI 3: Model dummy untuk testing
-                    st.warning("⚠️ Using dummy model for testing")
-                    dummy_model = tf.keras.Sequential([
-                        tf.keras.layers.Input(shape=(40,)),
-                        tf.keras.layers.Dense(128, activation='relu'),
-                        tf.keras.layers.Dropout(0.3),
-                        tf.keras.layers.Dense(64, activation='relu'),
-                        tf.keras.layers.Dense(5, activation='softmax')
-                    ])
-                    dummy_model.compile(optimizer='adam', loss='categorical_crossentropy')
-                    return dummy_model
-                    
-        except Exception as e:
-            st.error(f"Fatal error: {str(e)}")
+    if not os.path.exists(model_path):
+        st.error(f"❌ File model tidak ditemukan: {model_path}")
+        return None
+
+    try:
+        # Load dengan custom object
+        custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+        model = tf.keras.models.load_model(
+            model_path, 
+            custom_objects=custom_objects, 
+            compile=False
+        )
+        
+        # Validasi model
+        test_input = np.random.rand(1, 40).astype(np.float32)
+        test_output = model.predict(test_input, verbose=0)
+        
+        if test_output.shape[-1] == 5:
+            st.success("✅ Model berhasil dimuat")
+            return model
+        else:
+            st.warning(f"⚠️ Output shape tidak sesuai: {test_output.shape}")
             return None
-    else:
-        st.error(f"❌ Model file not found: {model_path}")
+            
+    except Exception as e:
+        st.error(f"❌ Gagal memuat model: {str(e)}")
         return None
 
 # ==========================================================
-# 2. FUNGSI LOAD METADATA
+# 3. LOAD METADATA
 # ==========================================================
 @st.cache_data
 def load_metadata_df():
@@ -91,44 +93,43 @@ def load_metadata_df():
     return None
 
 # ==========================================================
-# 3. FUNGSI PREDIKSI (SIMPLIFIED)
+# 4. PREDIKSI AKSEN
 # ==========================================================
 def predict_accent(audio_path, model):
-    if model is None: 
+    if model is None:
         return "❌ Model tidak tersedia"
     
     try:
-        # Load audio
+        # Load dan preprocess audio
         y, sr = librosa.load(audio_path, sr=16000, duration=10)
         
-        # Extract MFCC features
+        # Extract MFCC
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
         mfcc_scaled = np.mean(mfcc.T, axis=0)
         
         # Prepare input
         input_data = np.expand_dims(mfcc_scaled, axis=0).astype(np.float32)
         
-        # Predict
+        # Prediksi
         prediction = model.predict(input_data, verbose=0)
         
-        # Get result
+        # Kelas aksen
         aksen_classes = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
         predicted_idx = np.argmax(prediction[0])
         confidence = prediction[0][predicted_idx] * 100
         
-        result = f"{aksen_classes[predicted_idx]} ({confidence:.1f}%)"
-        return result
+        return f"{aksen_classes[predicted_idx]} ({confidence:.1f}%)"
         
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
 # ==========================================================
-# 4. MAIN UI
+# 5. MAIN APPLICATION
 # ==========================================================
 def main():
     st.set_page_config(
-        page_title="Deteksi Aksen Indonesia", 
-        page_icon="🎙️", 
+        page_title="Deteksi Aksen Indonesia",
+        page_icon="🎙️",
         layout="wide"
     )
 
@@ -138,7 +139,7 @@ def main():
 
     # Header
     st.title("🎙️ Sistem Deteksi Aksen Indonesia")
-    st.write("Aplikasi berbasis *Deep Learning* untuk klasifikasi aksen daerah Jawa dan Betawi.")
+    st.write("Aplikasi berbasis *Deep Learning* untuk klasifikasi aksen daerah.")
     st.divider()
 
     # Sidebar
@@ -149,12 +150,12 @@ def main():
             st.success("🤖 Model: Aktif")
         else:
             st.error("🚫 Model: Tidak Tersedia")
-
+        
         if df_metadata is not None:
             st.success(f"📁 Metadata: {len(df_metadata)} records")
         else:
             st.warning("⚠️ Metadata: Tidak ada")
-
+        
         st.divider()
         st.caption("🎓 Skripsi Project - 2026")
 
@@ -164,7 +165,7 @@ def main():
     with col1:
         st.subheader("📥 Input Audio")
         audio_file = st.file_uploader(
-            "Upload file audio (.wav, .mp3)", 
+            "Upload file audio (.wav, .mp3)",
             type=["wav", "mp3"]
         )
 
@@ -174,7 +175,7 @@ def main():
             if st.button("🚀 Analisis Aksen", type="primary", use_container_width=True):
                 if model_aksen is not None:
                     with st.spinner("🔍 Menganalisis karakteristik suara..."):
-                        # Save temporary file
+                        # Save temp file
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                             tmp.write(audio_file.getbuffer())
                             tmp_path = tmp.name
