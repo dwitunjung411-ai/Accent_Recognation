@@ -9,29 +9,16 @@ import pickle
 import random
 
 # ==========================================================
-# CLASS PROTOTYPICAL NETWORK (FIXED - HANDLE TRACKEDDICT)
+# CLASS PROTOTYPICAL NETWORK (KOMPATIBEL SEMUA VERSI TF)
 # ==========================================================
 @tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, embedding_model=None, **kwargs):
         super(PrototypicalNetwork, self).__init__(**kwargs)
         if embedding_model is not None and not isinstance(embedding_model, dict):
-            self.embedding = embedding_model
+            self._embedding_model = embedding_model
         else:
-            self.embedding = None
-    
-    def build(self, input_shape):
-        """Build dipanggil otomatis saat pertama kali model digunakan"""
-        super().build(input_shape)
-        
-        # Jika embedding masih None atau dict, coba ekstrak dari layers
-        if self.embedding is None or isinstance(self.embedding, dict):
-            # Cari embedding model dari submodules
-            for layer in self.submodules:
-                if isinstance(layer, (tf.keras.Model, tf.keras.Sequential)):
-                    if layer != self:  # Jangan ambil diri sendiri
-                        self.embedding = layer
-                        break
+            self._embedding_model = None
     
     def call(self, support_set, query_set, support_labels, n_way, training=None):
         """
@@ -43,11 +30,11 @@ class PrototypicalNetwork(tf.keras.Model):
         Returns:
             logits: (n_query, n_way)
         """
-        # Dapatkan embedding layer yang benar
+        # Dapatkan embedding layer
         embedding_layer = self._get_embedding_layer()
         
         if embedding_layer is None:
-            raise ValueError("Embedding layer tidak ditemukan!")
+            raise ValueError("Embedding layer tidak tersedia!")
         
         # Embedding untuk support dan query
         support_embeddings = embedding_layer(support_set, training=training)
@@ -76,31 +63,35 @@ class PrototypicalNetwork(tf.keras.Model):
         return logits
     
     def _get_embedding_layer(self):
-        """Ekstrak embedding layer dari berbagai kemungkinan"""
-        # 1. Jika self.embedding sudah callable
-        if hasattr(self, 'embedding') and callable(self.embedding):
-            return self.embedding
+        """Ekstrak embedding layer dengan berbagai metode"""
+        # 1. Cek _embedding_model
+        if hasattr(self, '_embedding_model') and self._embedding_model is not None:
+            if callable(self._embedding_model):
+                return self._embedding_model
         
-        # 2. Cari di layers
-        if hasattr(self, 'layers'):
+        # 2. Cek embedding (tanpa underscore)
+        if hasattr(self, 'embedding') and self.embedding is not None:
+            if callable(self.embedding):
+                return self.embedding
+        
+        # 3. Cek di self.layers
+        if hasattr(self, 'layers') and len(self.layers) > 0:
             for layer in self.layers:
                 if isinstance(layer, (tf.keras.Model, tf.keras.Sequential)):
                     return layer
         
-        # 3. Cari di _layers (internal keras)
-        if hasattr(self, '_layers'):
+        # 4. Cek di __dict__
+        for key, value in self.__dict__.items():
+            if isinstance(value, (tf.keras.Model, tf.keras.Sequential)):
+                if value != self:  # Jangan ambil diri sendiri
+                    return value
+        
+        # 5. Cek _layers (internal)
+        if hasattr(self, '_layers') and len(self._layers) > 0:
             for layer in self._layers:
                 if isinstance(layer, (tf.keras.Model, tf.keras.Sequential)):
                     return layer
         
-        # 4. Cari di submodules
-        for module in self.submodules:
-            if isinstance(module, (tf.keras.Model, tf.keras.Sequential)):
-                if module != self:
-                    return module
-        
-        # 5. Fallback: buat embedding sederhana on-the-fly
-        st.warning("⚠️ Menggunakan fallback embedding")
         return None
     
     def get_config(self):
@@ -161,27 +152,28 @@ def load_model_and_support():
             compile=False
         )
         
-        # Test model untuk trigger build
-        try:
-            dummy_support = np.random.rand(5, 40, 174, 3).astype(np.float32)
-            dummy_query = np.random.rand(1, 40, 174, 3).astype(np.float32)
-            dummy_labels = np.array([0, 1, 2, 3, 4])
-            
-            _ = model.call(
-                tf.convert_to_tensor(dummy_support),
-                tf.convert_to_tensor(dummy_query),
-                tf.convert_to_tensor(dummy_labels),
-                5
-            )
-            st.sidebar.success("✅ Model test passed")
-        except Exception as e:
-            st.sidebar.warning(f"⚠️ Model test: {str(e)[:100]}")
+        st.sidebar.info(f"📦 Model type: {type(model).__name__}")
+        
+        # Debug: cek struktur model
+        st.sidebar.write("🔍 Model attributes:")
+        model_attrs = [attr for attr in dir(model) if not attr.startswith('_')]
+        st.sidebar.text(f"Total: {len(model_attrs)}")
+        
+        # Cek apakah ada embedding
+        if hasattr(model, 'embedding'):
+            st.sidebar.success("✅ Found: model.embedding")
+        if hasattr(model, '_embedding_model'):
+            st.sidebar.success("✅ Found: model._embedding_model")
+        if hasattr(model, 'layers'):
+            st.sidebar.info(f"✅ Found: {len(model.layers)} layers")
         
         # Load support set
         support_set = np.load('support_set.npy')
         support_labels = np.load('support_labels.npy')
         
         st.sidebar.success(f"✅ Support Set: {support_set.shape}")
+        st.sidebar.success(f"✅ Support Labels: {support_labels.shape}")
+        
         return model, support_set, support_labels
         
     except FileNotFoundError as e:
@@ -189,7 +181,9 @@ def load_model_and_support():
         st.sidebar.info("💡 Pastikan file support_set.npy dan support_labels.npy ada!")
         return None, None, None
     except Exception as e:
-        st.sidebar.error(f"❌ Error: {str(e)}")
+        st.sidebar.error(f"❌ Error loading: {str(e)}")
+        import traceback
+        st.sidebar.code(traceback.format_exc())
         return None, None, None
 
 @st.cache_data
@@ -223,8 +217,12 @@ def predict_accent(audio_path, model, support_set, support_labels, n_way, label_
         if mfcc_feat is None:
             return "❌ Error extracting features"
         
+        st.info(f"✅ MFCC shape: {mfcc_feat.shape}")
+        
         # 2. Expand batch dimension
         query_features = np.expand_dims(mfcc_feat, axis=0).astype(np.float32)
+        st.info(f"✅ Query shape: {query_features.shape}")
+        st.info(f"✅ Support shape: {support_set.shape}")
         
         # 3. Convert to tensors
         support_tensor = tf.convert_to_tensor(support_set, dtype=tf.float32)
@@ -232,12 +230,15 @@ def predict_accent(audio_path, model, support_set, support_labels, n_way, label_
         support_labels_tensor = tf.convert_to_tensor(support_labels, dtype=tf.int32)
         
         # 4. Forward pass
+        st.info("🔄 Calling model...")
         logits = model.call(
             support_tensor,
             query_tensor,
             support_labels_tensor,
             n_way
         )
+        
+        st.success(f"✅ Logits shape: {logits.shape}")
         
         # 5. Get prediction
         pred_index = tf.argmax(logits, axis=1).numpy()[0]
@@ -262,7 +263,8 @@ def predict_accent(audio_path, model, support_set, support_labels, n_way, label_
     except Exception as e:
         import traceback
         error_detail = traceback.format_exc()
-        st.error(f"Full error:\n{error_detail}")
+        st.error("❌ Full Error:")
+        st.code(error_detail)
         return f"❌ Error: {str(e)}"
 
 # ==========================================================
@@ -396,8 +398,6 @@ with st.expander("ℹ️ Tentang Few-Shot Learning"):
     - Menggunakan **Support Set** sebagai referensi untuk setiap kelas
     - Menghitung **prototype** (centroid) dari embedding setiap kelas
     - Mengklasifikasikan query berdasarkan jarak ke prototype terdekat
-    
-    **Support Set** adalah sekumpulan contoh dari setiap kelas aksen yang digunakan sebagai referensi saat prediksi.
     
     **File yang diperlukan:**
     - `model_embedding_aksen.keras` - Model yang sudah di-training
