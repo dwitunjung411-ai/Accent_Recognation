@@ -57,23 +57,22 @@ def predict_accent(audio_path, model):
         # === SIMPLE CLASSIFIER (CENTROID BASED) ===
         
         embedding = embedding[0]  # (embedding_dim,)
+embedding = np.asarray(embedding).squeeze()
 
 distances = {}
+
 for cls, centroid in centroids.items():
-    centroid = np.array(centroid)
+    centroid = np.asarray(centroid).squeeze()
+
+    if embedding.shape != centroid.shape:
+        raise ValueError(
+            f"Shape mismatch: embedding {embedding.shape} vs centroid {centroid.shape} for class {cls}"
+        )
+
     distances[cls] = np.linalg.norm(embedding - centroid)
 
 predicted_class = min(distances, key=distances.get)
 
-
-
-
-        distances = {}
-        for cls, centroid in class_centroids.items():
-            distances[cls] = np.linalg.norm(embedding - centroid)
-
-        predicted_class = min(distances, key=distances.get)
-        return predicted_class
 
     except Exception as e:
         return f"Error Analisis: {e}"
