@@ -9,13 +9,29 @@ import pickle
 import random
 
 # ==========================================================
-# CLASS PROTOTYPICAL NETWORK (SESUAI NOTEBOOK)
+# CLASS PROTOTYPICAL NETWORK (FIXED - HANDLE TRACKEDDICT)
 # ==========================================================
 @tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, embedding_model=None, **kwargs):
         super(PrototypicalNetwork, self).__init__(**kwargs)
-        self.embedding = embedding_model
+        if embedding_model is not None and not isinstance(embedding_model, dict):
+            self.embedding = embedding_model
+        else:
+            self.embedding = None
+    
+    def build(self, input_shape):
+        """Build dipanggil otomatis saat pertama kali model digunakan"""
+        super().build(input_shape)
+        
+        # Jika embedding masih None atau dict, coba ekstrak dari layers
+        if self.embedding is None or isinstance(self.embedding, dict):
+            # Cari embedding model dari submodules
+            for layer in self.submodules:
+                if isinstance(layer, (tf.keras.Model, tf.keras.Sequential)):
+                    if layer != self:  # Jangan ambil diri sendiri
+                        self.embedding = layer
+                        break
     
     def call(self, support_set, query_set, support_labels, n_way, training=None):
         """
@@ -27,47 +43,68 @@ class PrototypicalNetwork(tf.keras.Model):
         Returns:
             logits: (n_query, n_way)
         """
+        # Dapatkan embedding layer yang benar
+        embedding_layer = self._get_embedding_layer()
+        
+        if embedding_layer is None:
+            raise ValueError("Embedding layer tidak ditemukan!")
+        
         # Embedding untuk support dan query
-        support_embeddings = self.embedding(support_set, training=training)  # (n_support, embed_dim)
-        query_embeddings = self.embedding(query_set, training=training)      # (n_query, embed_dim)
+        support_embeddings = embedding_layer(support_set, training=training)
+        query_embeddings = embedding_layer(query_set, training=training)
         
         # Hitung prototype untuk setiap kelas
         prototypes = []
         for i in range(n_way):
-            # Ambil embedding dari kelas i
-            class_embeddings = tf.boolean_mask(
-                support_embeddings,
-                tf.equal(support_labels, i)
-            )
-            # Prototype = rata-rata embedding kelas i
+            class_mask = tf.equal(support_labels, i)
+            class_embeddings = tf.boolean_mask(support_embeddings, class_mask)
             prototype = tf.reduce_mean(class_embeddings, axis=0)
             prototypes.append(prototype)
         
-        prototypes = tf.stack(prototypes)  # (n_way, embed_dim)
-        
-        # Hitung jarak euclidean antara query dan prototypes
-        # query_embeddings: (n_query, embed_dim)
-        # prototypes: (n_way, embed_dim)
-        
-        # Expand dimensions untuk broadcasting
-        query_expanded = tf.expand_dims(query_embeddings, 1)  # (n_query, 1, embed_dim)
-        prototypes_expanded = tf.expand_dims(prototypes, 0)   # (1, n_way, embed_dim)
+        prototypes = tf.stack(prototypes)
         
         # Hitung jarak euclidean
+        query_expanded = tf.expand_dims(query_embeddings, 1)
+        prototypes_expanded = tf.expand_dims(prototypes, 0)
+        
         distances = tf.reduce_sum(
             tf.square(query_expanded - prototypes_expanded),
             axis=-1
-        )  # (n_query, n_way)
+        )
         
-        # Konversi jarak ke logits (negative distance)
         logits = -distances
-        
         return logits
+    
+    def _get_embedding_layer(self):
+        """Ekstrak embedding layer dari berbagai kemungkinan"""
+        # 1. Jika self.embedding sudah callable
+        if hasattr(self, 'embedding') and callable(self.embedding):
+            return self.embedding
+        
+        # 2. Cari di layers
+        if hasattr(self, 'layers'):
+            for layer in self.layers:
+                if isinstance(layer, (tf.keras.Model, tf.keras.Sequential)):
+                    return layer
+        
+        # 3. Cari di _layers (internal keras)
+        if hasattr(self, '_layers'):
+            for layer in self._layers:
+                if isinstance(layer, (tf.keras.Model, tf.keras.Sequential)):
+                    return layer
+        
+        # 4. Cari di submodules
+        for module in self.submodules:
+            if isinstance(module, (tf.keras.Model, tf.keras.Sequential)):
+                if module != self:
+                    return module
+        
+        # 5. Fallback: buat embedding sederhana on-the-fly
+        st.warning("⚠️ Menggunakan fallback embedding")
+        return None
     
     def get_config(self):
         config = super().get_config()
-        if self.embedding is not None:
-            config.update({"embedding_model": tf.keras.layers.serialize(self.embedding)})
         return config
 
 # ==========================================================
@@ -106,38 +143,8 @@ def extract_mfcc(audio_path, sr=22050, n_mfcc=40, max_len=174):
         return mfcc_3channel.astype(np.float32)
         
     except Exception as e:
-        print(f"Error extracting MFCC: {e}")
+        st.error(f"Error extracting MFCC: {e}")
         return None
-
-def create_episode(data, labels, n_way=5, k_shot=5, q_query=5):
-    """Buat episode untuk few-shot learning"""
-    unique_labels = np.unique(labels)
-    selected_labels = random.sample(list(unique_labels), n_way)
-    
-    support_set = []
-    query_set = []
-    support_labels = []
-    query_labels = []
-    
-    for label in selected_labels:
-        indices = np.where(labels == label)[0]
-        sampled_indices = random.sample(list(indices), k_shot + q_query)
-        
-        support_indices = sampled_indices[:k_shot]
-        query_indices = sampled_indices[k_shot:]
-        
-        support_set.append(data[support_indices])
-        query_set.append(data[query_indices])
-        
-        support_labels.extend([label] * k_shot)
-        query_labels.extend([label] * q_query)
-    
-    support_set = np.vstack(support_set)
-    query_set = np.vstack(query_set)
-    support_labels = np.array(support_labels)
-    query_labels = np.array(query_labels)
-    
-    return support_set, query_set, support_labels, query_labels
 
 # ==========================================================
 # LOAD RESOURCES
@@ -154,13 +161,33 @@ def load_model_and_support():
             compile=False
         )
         
-        # Load support set (PENTING!)
+        # Test model untuk trigger build
+        try:
+            dummy_support = np.random.rand(5, 40, 174, 3).astype(np.float32)
+            dummy_query = np.random.rand(1, 40, 174, 3).astype(np.float32)
+            dummy_labels = np.array([0, 1, 2, 3, 4])
+            
+            _ = model.call(
+                tf.convert_to_tensor(dummy_support),
+                tf.convert_to_tensor(dummy_query),
+                tf.convert_to_tensor(dummy_labels),
+                5
+            )
+            st.sidebar.success("✅ Model test passed")
+        except Exception as e:
+            st.sidebar.warning(f"⚠️ Model test: {str(e)[:100]}")
+        
+        # Load support set
         support_set = np.load('support_set.npy')
         support_labels = np.load('support_labels.npy')
         
-        st.sidebar.success("✅ Model & Support Set loaded")
+        st.sidebar.success(f"✅ Support Set: {support_set.shape}")
         return model, support_set, support_labels
         
+    except FileNotFoundError as e:
+        st.sidebar.error(f"❌ File tidak ditemukan: {str(e)}")
+        st.sidebar.info("💡 Pastikan file support_set.npy dan support_labels.npy ada!")
+        return None, None, None
     except Exception as e:
         st.sidebar.error(f"❌ Error: {str(e)}")
         return None, None, None
@@ -174,25 +201,21 @@ def load_metadata():
 
 @st.cache_data
 def load_label_encoder():
-    """Load label encoder jika ada"""
+    """Load label encoder"""
     try:
         with open('label_encoder.pkl', 'rb') as f:
             return pickle.load(f)
     except:
-        # Jika tidak ada, buat manual
         from sklearn.preprocessing import LabelEncoder
         le = LabelEncoder()
         le.classes_ = np.array(['Betawi', 'Jawa Tengah', 'Jawa Timur', 'Sunda', 'Yogyakarta'])
         return le
 
 # ==========================================================
-# PREDIKSI (SESUAI NOTEBOOK)
+# PREDIKSI
 # ==========================================================
 def predict_accent(audio_path, model, support_set, support_labels, n_way, label_encoder):
-    """
-    Prediksi aksen menggunakan Prototypical Network
-    Sesuai dengan fungsi detect_accent_from_audio di notebook
-    """
+    """Prediksi aksen menggunakan Prototypical Network"""
     try:
         # 1. Extract MFCC dari audio query
         mfcc_feat = extract_mfcc(audio_path)
@@ -208,7 +231,7 @@ def predict_accent(audio_path, model, support_set, support_labels, n_way, label_
         query_tensor = tf.convert_to_tensor(query_features, dtype=tf.float32)
         support_labels_tensor = tf.convert_to_tensor(support_labels, dtype=tf.int32)
         
-        # 4. Forward pass ke Prototypical Network
+        # 4. Forward pass
         logits = model.call(
             support_tensor,
             query_tensor,
@@ -220,7 +243,7 @@ def predict_accent(audio_path, model, support_set, support_labels, n_way, label_
         pred_index = tf.argmax(logits, axis=1).numpy()[0]
         probs = tf.nn.softmax(logits, axis=1).numpy()[0]
         
-        # 6. Convert index ke label
+        # 6. Convert to label
         pred_label = label_encoder.inverse_transform([pred_index])[0]
         confidence = probs[pred_index] * 100
         
@@ -237,6 +260,9 @@ def predict_accent(audio_path, model, support_set, support_labels, n_way, label_
         return result
         
     except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        st.error(f"Full error:\n{error_detail}")
         return f"❌ Error: {str(e)}"
 
 # ==========================================================
@@ -261,15 +287,11 @@ label_encoder = load_label_encoder()
 with st.sidebar:
     st.header("🛸 Status Sistem")
     
-    if model is not None:
-        st.success("🤖 Model: Aktif")
-    if support_set is not None:
-        st.info(f"📦 Support Set: {support_set.shape[0]} samples")
     if metadata is not None:
         st.info(f"📁 Metadata: {len(metadata)} records")
     
     st.divider()
-    st.caption("🎓 Few-Shot Learning Project - 2026")
+    st.caption("🎓 Few-Shot Learning - 2026")
 
 # Main layout
 col1, col2 = st.columns([1, 1.2])
@@ -288,12 +310,12 @@ with col1:
         if st.button("🚀 Analisis Aksen", type="primary", use_container_width=True):
             if model is not None and support_set is not None:
                 with st.spinner("🔍 Menganalisis karakteristik suara..."):
-                    # Save temporary file
+                    # Save temp file
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                         tmp.write(audio_file.getbuffer())
                         tmp_path = tmp.name
                     
-                    # Predict dengan n_way=5 (5 kelas aksen)
+                    # Predict
                     n_way = len(label_encoder.classes_)
                     hasil = predict_accent(
                         tmp_path, 
@@ -326,13 +348,13 @@ with col1:
                         
                         st.subheader("💎 Info Pembicara (dari Metadata)")
                         if user_info:
-                            # Mapping provinsi ke aksen
                             province_to_accent = {
                                 'DKI Jakarta': 'Betawi',
                                 'Jawa Barat': 'Sunda',
                                 'Jawa Tengah': 'Jawa Tengah',
                                 'Jawa Timur': 'Jawa Timur',
-                                'Yogyakarta': 'Yogyakarta'
+                                'Yogyakarta': 'Yogyakarta',
+                                'D.I YogyaKarta': 'Yogyakarta'
                             }
                             
                             actual_province = user_info.get('provinsi', '-')
@@ -346,7 +368,7 @@ with col1:
                                 st.metric("🗺️ Provinsi", actual_province)
                                 st.metric("✅ Aksen Sebenarnya", actual_accent)
                             
-                            # Check if correct
+                            # Check accuracy
                             if actual_accent != '-':
                                 predicted_accent = hasil.split('(')[0].strip()
                                 if actual_accent == predicted_accent:
@@ -376,4 +398,10 @@ with st.expander("ℹ️ Tentang Few-Shot Learning"):
     - Mengklasifikasikan query berdasarkan jarak ke prototype terdekat
     
     **Support Set** adalah sekumpulan contoh dari setiap kelas aksen yang digunakan sebagai referensi saat prediksi.
+    
+    **File yang diperlukan:**
+    - `model_embedding_aksen.keras` - Model yang sudah di-training
+    - `support_set.npy` - Support set dari notebook (cell 43)
+    - `support_labels.npy` - Label support set dari notebook (cell 43)
+    - `metadata.csv` - Metadata pembicara (optional)
     """)
