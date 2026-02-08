@@ -59,11 +59,12 @@ def predict_accent(audio_path, model):
         embedding = embedding[0]  # (embedding_dim,)
 
 distances = {}
-forалара, centroid in centroids.items():
+for cls, centroid in centroids.items():
     centroid = np.array(centroid)
     distances[cls] = np.linalg.norm(embedding - centroid)
 
 predicted_class = min(distances, key=distances.get)
+
 
 
 
