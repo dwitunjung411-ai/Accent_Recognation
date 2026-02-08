@@ -1,83 +1,61 @@
 import streamlit as st
 import numpy as np
-import pandas as pd
 import librosa
 import tempfile
-import os
 import tensorflow as tf
+import os
 
-# ==========================================================
+st.set_page_config(page_title="Accent Test", layout="centered")
+
+# =========================
 # LOAD MODEL
-# ==========================================================
-@st.cache(allow_output_mutation=True)
-def load_embedding_model():
+# =========================
+def load_model():
     return tf.keras.models.load_model("model_embedding_aksen.keras", compile=False)
 
-# ==========================================================
-# LOAD CENTROID
-# ==========================================================
-@st.cache(allow_output_mutation=True)
-def load_centroids():
-    return np.load("accent_centroids.npy", allow_pickle=True).item()
-
-# ==========================================================
-# LOAD METADATA
-# ==========================================================
-@st.cache(allow_output_mutation=True)
-def load_metadata():
-    if os.path.exists("metadata.csv"):
-        return pd.read_csv("metadata.csv")
-    return None
-
-# ==========================================================
+# =========================
 # MFCC
-# ==========================================================
-def extract_mfcc(audio_path):
-    y, sr = librosa.load(audio_path, sr=16000)
+# =========================
+def extract_mfcc(path):
+    y, sr = librosa.load(path, sr=16000)
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
     return np.mean(mfcc.T, axis=0)
 
-# ==========================================================
-# PREDIKSI AKSEN
-# ==========================================================
-def predict_accent(audio_path, model, centroids):
+# =========================
+# PREDICT (TEST SAJA)
+# =========================
+def predict(audio_path, model):
     mfcc = extract_mfcc(audio_path)
     mfcc = np.expand_dims(mfcc, axis=0)
+    emb = model.predict(mfcc)
+    return emb.shape
 
-    embedding = model.predict(mfcc)
-    embedding = np.squeeze(embedding)
+# =========================
+# UI
+# =========================
+st.title("🎙️ Test Model Embedding")
 
-    distances = {}
-    for label, centroid in centroids.items():
-        centroid = np.squeeze(np.array(centroid))
-        distances[label] = np.linalg.norm(embedding - centroid)
+try:
+    model = load_model()
+    st.success("✅ Model berhasil di-load")
+except Exception as e:
+    st.error(f"❌ Gagal load model: {e}")
+    st.stop()
 
-    return min(distances, key=distances.get)
+audio = st.file_uploader("Upload audio", type=["wav", "mp3"])
 
-# ==========================================================
-# STREAMLIT UI
-# ==========================================================
-def main():
-    st.title("🎙️ Deteksi Aksen Bahasa Indonesia")
+if audio:
+    st.audio(audio)
 
-    model = load_embedding_model()
-    centroids = load_centroids()
-    metadata = load_metadata()
+    if st.button("TEST MODEL"):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            tmp.write(audio.getbuffer())
+            path = tmp.name
 
-    audio_file = st.file_uploader("Upload Audio", type=["wav", "mp3"])
+        try:
+            shape = predict(path, model)
+            st.success(f"🎯 Model jalan | Embedding shape: {shape}")
+        except Exception as e:
+            st.error(f"❌ Error predict: {e}")
 
-    if audio_file:
-        st.audio(audio_file)
-
-        if st.button("🔍 Deteksi Aksen"):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                tmp.write(audio_file.getbuffer())
-                tmp_path = tmp.name
-
-            hasil = predict_accent(tmp_path, model, centroids)
-            os.remove(tmp_path)
-
-            st.success(f"🎯 Aksen Terdeteksi: **{hasil}**")
-
-if __name__ == "__main__":
-    main()
+        os.remove(path)
