@@ -7,7 +7,7 @@ import os
 import tensorflow as tf
 
 # ==========================================================
-# 1. CLASS PROTOTYPICAL NETWORK
+# 1. CLASS PROTOTYPICAL NETWORK (MULTIPLE STRATEGIES)
 # ==========================================================
 @tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
@@ -16,7 +16,6 @@ class PrototypicalNetwork(tf.keras.Model):
         self._embedding = embedding_model
     
     def call(self, inputs, training=None):
-        # Handle berbagai format input
         if isinstance(inputs, (list, tuple)):
             x = inputs[1] if len(inputs) > 1 else inputs[0]
         elif isinstance(inputs, dict):
@@ -24,12 +23,10 @@ class PrototypicalNetwork(tf.keras.Model):
         else:
             x = inputs
         
-        # Gunakan embedding jika ada
         if self._embedding is not None and callable(self._embedding):
             return self._embedding(x, training=training)
         
-        # Cari layer yang callable
-        for attr_name in ['embedding', '_embedding_layer', 'layers']:
+        for attr_name in ['embedding', '_embedding_layer']:
             if hasattr(self, attr_name):
                 attr = getattr(self, attr_name)
                 if callable(attr):
@@ -38,7 +35,6 @@ class PrototypicalNetwork(tf.keras.Model):
                     except:
                         pass
         
-        # Return input as-is jika tidak ada layer
         return x
     
     def get_config(self):
@@ -46,7 +42,7 @@ class PrototypicalNetwork(tf.keras.Model):
         return config
 
 # ==========================================================
-# 2. LOAD MODEL
+# 2. LOAD MODEL (DENGAN DEBUGGING DETAIL)
 # ==========================================================
 @st.cache_resource
 def load_accent_model():
@@ -54,12 +50,34 @@ def load_accent_model():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     model_path = os.path.join(current_dir, model_name)
 
+    # Debug info
+    debug_info = []
+    debug_info.append(f"📁 Current directory: {current_dir}")
+    debug_info.append(f"🔍 Looking for: {model_path}")
+    debug_info.append(f"✅ File exists: {os.path.exists(model_path)}")
+    
+    if os.path.exists(model_path):
+        debug_info.append(f"📊 File size: {os.path.getsize(model_path) / 1024 / 1024:.2f} MB")
+
+    # Tampilkan debug info
+    with st.sidebar:
+        with st.expander("🔧 Debug Info", expanded=False):
+            st.code("\n".join(debug_info))
+
     if not os.path.exists(model_path):
-        st.error(f"❌ File model tidak ditemukan: {model_path}")
+        st.error(f"❌ File model tidak ditemukan!")
+        st.info(f"💡 Pastikan file '{model_name}' ada di folder yang sama dengan script")
+        
+        # Cek file apa aja yang ada
+        files_in_dir = [f for f in os.listdir(current_dir) if f.endswith(('.keras', '.h5', '.pkl'))]
+        if files_in_dir:
+            st.warning(f"📂 File model yang ditemukan: {', '.join(files_in_dir)}")
+        
         return None
 
+    # STRATEGI 1: Load dengan custom objects
     try:
-        # Load dengan custom object
+        st.info("🔄 Mencoba strategi 1: Load dengan PrototypicalNetwork...")
         custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
         model = tf.keras.models.load_model(
             model_path, 
@@ -67,20 +85,78 @@ def load_accent_model():
             compile=False
         )
         
-        # Validasi model
+        # Test model
         test_input = np.random.rand(1, 40).astype(np.float32)
         test_output = model.predict(test_input, verbose=0)
         
         if test_output.shape[-1] == 5:
-            st.success("✅ Model berhasil dimuat")
+            st.success("✅ Strategi 1 BERHASIL - Model dimuat dengan PrototypicalNetwork")
             return model
         else:
-            st.warning(f"⚠️ Output shape tidak sesuai: {test_output.shape}")
-            return None
+            st.warning(f"⚠️ Strategi 1: Output shape {test_output.shape}, bukan (1, 5)")
             
-    except Exception as e:
-        st.error(f"❌ Gagal memuat model: {str(e)}")
-        return None
+    except Exception as e1:
+        st.warning(f"⚠️ Strategi 1 gagal: {str(e1)[:150]}")
+
+    # STRATEGI 2: Load tanpa custom objects
+    try:
+        st.info("🔄 Mencoba strategi 2: Load tanpa custom objects...")
+        model = tf.keras.models.load_model(model_path, compile=False)
+        
+        # Test model
+        test_input = np.random.rand(1, 40).astype(np.float32)
+        test_output = model.predict(test_input, verbose=0)
+        
+        if test_output.shape[-1] == 5:
+            st.success("✅ Strategi 2 BERHASIL - Model dimuat tanpa custom objects")
+            return model
+        else:
+            st.warning(f"⚠️ Strategi 2: Output shape {test_output.shape}")
+            
+    except Exception as e2:
+        st.warning(f"⚠️ Strategi 2 gagal: {str(e2)[:150]}")
+
+    # STRATEGI 3: Load dengan safe_mode
+    try:
+        st.info("🔄 Mencoba strategi 3: Load dengan safe_mode...")
+        model = tf.keras.models.load_model(
+            model_path, 
+            compile=False,
+            safe_mode=False
+        )
+        
+        # Test model
+        test_input = np.random.rand(1, 40).astype(np.float32)
+        test_output = model.predict(test_input, verbose=0)
+        
+        if test_output.shape[-1] == 5:
+            st.success("✅ Strategi 3 BERHASIL - Model dimuat dengan safe_mode=False")
+            return model
+            
+    except Exception as e3:
+        st.warning(f"⚠️ Strategi 3 gagal: {str(e3)[:150]}")
+
+    # STRATEGI 4: Coba load sebagai saved_model format
+    try:
+        st.info("🔄 Mencoba strategi 4: Load sebagai SavedModel...")
+        # Kadang .keras sebenarnya saved_model
+        model_dir = model_path.replace('.keras', '')
+        if os.path.exists(model_dir):
+            model = tf.keras.models.load_model(model_dir)
+            
+            test_input = np.random.rand(1, 40).astype(np.float32)
+            test_output = model.predict(test_input, verbose=0)
+            
+            if test_output.shape[-1] == 5:
+                st.success("✅ Strategi 4 BERHASIL - Model dimuat sebagai SavedModel")
+                return model
+                
+    except Exception as e4:
+        st.warning(f"⚠️ Strategi 4 gagal: {str(e4)[:150]}")
+
+    st.error("❌ Semua strategi loading gagal!")
+    st.info("💡 Tips: Coba train ulang model dan save dengan format yang lebih sederhana")
+    return None
 
 # ==========================================================
 # 3. LOAD METADATA
@@ -118,7 +194,10 @@ def predict_accent(audio_path, model):
         predicted_idx = np.argmax(prediction[0])
         confidence = prediction[0][predicted_idx] * 100
         
-        return f"{aksen_classes[predicted_idx]} ({confidence:.1f}%)"
+        # Detail probabilitas semua kelas
+        prob_detail = "\n".join([f"{cls}: {prob*100:.1f}%" for cls, prob in zip(aksen_classes, prediction[0])])
+        
+        return f"{aksen_classes[predicted_idx]} ({confidence:.1f}%)\n\n📊 Detail Probabilitas:\n{prob_detail}"
         
     except Exception as e:
         return f"❌ Error: {str(e)}"
@@ -199,7 +278,7 @@ def main():
                                 if "❌" in hasil_aksen:
                                     st.error(hasil_aksen)
                                 else:
-                                    st.success(f"**{hasil_aksen}**")
+                                    st.text(hasil_aksen)
 
                             st.divider()
                             
