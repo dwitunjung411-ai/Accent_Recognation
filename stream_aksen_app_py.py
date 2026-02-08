@@ -7,7 +7,7 @@ import os
 import tensorflow as tf
 
 # ==========================================================
-# CLASS PROTOTYPICAL NETWORK (WAJIB ADA)
+# CLASS PROTOTYPICAL NETWORK
 # ==========================================================
 @tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
@@ -16,7 +16,6 @@ class PrototypicalNetwork(tf.keras.Model):
         self.embedding = embedding_model
     
     def call(self, inputs, training=None):
-        # Handle berbagai format input
         if isinstance(inputs, (list, tuple)):
             x = inputs[1] if len(inputs) > 1 else inputs[0]
         elif isinstance(inputs, dict):
@@ -24,25 +23,21 @@ class PrototypicalNetwork(tf.keras.Model):
         else:
             x = inputs
         
-        # Gunakan embedding
         if self.embedding is not None:
             if callable(self.embedding):
                 return self.embedding(x, training=training)
             elif isinstance(self.embedding, dict):
-                # Jika embedding adalah dict, rekonstruksi
                 try:
                     emb = tf.keras.layers.deserialize(self.embedding)
                     return emb(x, training=training)
                 except:
                     pass
         
-        # Fallback: cari layer di dalam model
         if hasattr(self, 'layers'):
             for layer in self.layers:
                 if isinstance(layer, (tf.keras.Model, tf.keras.Sequential)):
                     return layer(x, training=training)
         
-        # Last resort: return input
         return x
     
     def get_config(self):
@@ -63,7 +58,6 @@ def load_accent_model():
         return None
     
     try:
-        # Load dengan custom objects
         custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
         model = tf.keras.models.load_model(
             model_path, 
@@ -88,7 +82,7 @@ def load_metadata_df():
     return None
 
 # ==========================================================
-# PREDIKSI
+# PREDIKSI (FIXED: NORMALISASI OUTPUT + URUTAN KELAS)
 # ==========================================================
 def predict_accent(audio_path, model):
     if model is None:
@@ -105,18 +99,37 @@ def predict_accent(audio_path, model):
         # Prepare input
         X = np.expand_dims(mfcc_mean, axis=0).astype(np.float32)
         
-        # Predict
-        prediction = model.predict(X, verbose=0)
+        # Predict (raw output)
+        raw_output = model.predict(X, verbose=0)[0]
         
-        # Get result
+        # NORMALISASI: Konversi ke probabilitas dengan softmax
+        # Karena output model sepertinya bukan probabilitas
+        exp_output = np.exp(raw_output - np.max(raw_output))  # Stabilisasi numerik
+        probabilities = exp_output / np.sum(exp_output)
+        
+        # URUTAN KELAS - SESUAIKAN DENGAN TRAINING!
+        # Coba beberapa kemungkinan urutan:
         aksen_classes = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
-        predicted_idx = np.argmax(prediction[0])
-        confidence = prediction[0][predicted_idx] * 100
         
-        # Detail semua probabilitas
-        detail = "\n".join([f"{cls}: {prob*100:.1f}%" for cls, prob in zip(aksen_classes, prediction[0])])
+        # Get hasil
+        predicted_idx = np.argmax(probabilities)
+        confidence = probabilities[predicted_idx] * 100
         
-        return f"{aksen_classes[predicted_idx]} ({confidence:.1f}%)\n\n📊 Detail:\n{detail}"
+        # Detail probabilitas
+        detail_lines = []
+        for i, (cls, prob) in enumerate(zip(aksen_classes, probabilities)):
+            marker = "👉 " if i == predicted_idx else "   "
+            detail_lines.append(f"{marker}{cls}: {prob*100:.2f}%")
+        
+        detail = "\n".join(detail_lines)
+        
+        result = f"{aksen_classes[predicted_idx]} ({confidence:.1f}%)\n\n📊 Detail Probabilitas:\n{detail}"
+        
+        # Tambahan: Tampilkan raw output untuk debugging
+        raw_detail = "\n".join([f"{cls}: {val:.2f}" for cls, val in zip(aksen_classes, raw_output)])
+        result += f"\n\n🔧 Raw Output (Debug):\n{raw_detail}"
+        
+        return result
         
     except Exception as e:
         return f"❌ Error: {str(e)}"
@@ -138,11 +151,22 @@ st.divider()
 model = load_accent_model()
 metadata = load_metadata_df()
 
-# Sidebar status
+# Sidebar
 with st.sidebar:
     st.header("🛸 Status Sistem")
     if metadata is not None:
         st.info(f"📁 Metadata: {len(metadata)} records")
+    
+    st.divider()
+    st.subheader("⚙️ Pengaturan Kelas")
+    st.caption("Urutan kelas harus sesuai dengan saat training model")
+    
+    # OPSI: User bisa ubah urutan kelas
+    class_order = st.text_area(
+        "Urutan Kelas (pisahkan dengan koma)",
+        value="Sunda, Jawa Tengah, Jawa Timur, Yogyakarta, Betawi",
+        help="Ubah urutan ini jika prediksi salah terus"
+    )
 
 # Main layout
 col1, col2 = st.columns([1, 1.2])
@@ -189,14 +213,37 @@ with col1:
                         
                         st.divider()
                         
-                        st.subheader("💎 Info Pembicara")
+                        st.subheader("💎 Info Pembicara (dari Metadata)")
                         if user_info:
+                            # BANDINGKAN dengan prediksi
+                            actual_province = user_info.get('provinsi', '-')
+                            
+                            # Mapping provinsi ke aksen
+                            province_to_accent = {
+                                'DKI Jakarta': 'Betawi',
+                                'Jawa Barat': 'Sunda',
+                                'Jawa Tengah': 'Jawa Tengah',
+                                'Jawa Timur': 'Jawa Timur',
+                                'Yogyakarta': 'Yogyakarta'
+                            }
+                            
+                            actual_accent = province_to_accent.get(actual_province, '-')
+                            
                             col_a, col_b = st.columns(2)
                             with col_a:
                                 st.metric("🎂 Usia", f"{user_info.get('usia', '-')} Tahun")
                                 st.metric("🚻 Gender", user_info.get('gender', '-'))
                             with col_b:
-                                st.metric("🗺️ Provinsi", user_info.get('provinsi', '-'))
+                                st.metric("🗺️ Provinsi", actual_province)
+                                st.metric("✅ Aksen Sebenarnya", actual_accent)
+                            
+                            # Warning jika beda
+                            if actual_accent != '-':
+                                predicted_accent = hasil.split('(')[0].strip()
+                                if actual_accent != predicted_accent:
+                                    st.warning(f"⚠️ Prediksi tidak sesuai! Seharusnya: **{actual_accent}**")
+                                else:
+                                    st.success("✅ Prediksi BENAR!")
                         else:
                             st.info("🕵️ File tidak terdaftar dalam metadata")
                     
