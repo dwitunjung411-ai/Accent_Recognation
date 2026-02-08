@@ -7,51 +7,83 @@ import os
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 
-# ==========================================================
-# 1. DEFINISI CLASS PROTOTYPICAL NETWORK
-# ==========================================================
-@tf.keras.utils.register_keras_serializable(package="Custom")
-class PrototypicalNetwork(tf.keras.Model):
-    def __init__(self, embedding_model=None, **kwargs):
-        super(PrototypicalNetwork, self).__init__(**kwargs)
-        self.embedding = embedding_model
-
-    def call(self, support_set, query_set, support_labels, n_way):
-        # Memastikan embedding dipanggil dengan query_set
-        return self.embedding(query_set)
-
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            "embedding_model": tf.keras.layers.serialize(self.embedding)
-        })
-        return config
-
-# ==========================================================
-# 2. FUNGSI LOAD DATA
-# ==========================================================
 @st.cache_resource
-def load_accent_model():
-    model_name = "model_embedding_aksen.kera"
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(current_dir, model_name)
+def load_model_from_url(model_url):
+    """Load model langsung dari URL"""
+    try:
+        # Download model
+        response = requests.get(model_url)
+        response.raise_for_status()
+        
+        # Simpan sementara
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.keras') as tmp:
+            tmp.write(response.content)
+            tmp_path = tmp.name
+        
+        # Load model
+        custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+        model = tf.keras.models.load_model(tmp_path, custom_objects=custom_objects)
+        
+        # Hapus file temporary
+        os.unlink(tmp_path)
+        
+        return model
+    except Exception as e:
+        st.error(f"Failed to load model from URL: {str(e)}")
+        return None
 
-    if os.path.exists(model_path):
-        try:
-            custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
-            # Load tanpa compile untuk stabilitas
-            model = tf.keras.models.load_model(model_path, custom_objects=custom_objects, compile=False)
-            return model
-        except Exception as e:
-            return None
-    return None
+@st.cache_resource
+def load_numpy_from_url(url):
+    """Load numpy array dari URL"""
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        
+        # Simpan sementara
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.npy') as tmp:
+            tmp.write(response.content)
+            tmp_path = tmp.name
+        
+        # Load numpy
+        data = np.load(tmp_path, allow_pickle=True)
+        
+        # Hapus file temporary
+        os.unlink(tmp_path)
+        
+        return data
+    except Exception as e:
+        st.error(f"Failed to load data from URL: {str(e)}")
+        return None
 
-@st.cache_data
-def load_metadata_df():
-    csv_path = "metadata.csv"
-    if os.path.exists(csv_path):
-        return pd.read_csv(csv_path)
-    return None
+# Di load_resources():
+def load_resources():
+    # GitHub URLs (GANTI DENGAN URL ANDA)
+    GITHUB_BASE = "https://github.com/dwitunjung411-ai/Accent_Recognation/"
+    
+    MODEL_URL = GITHUB_BASE + "model_detect_aksen.keras"
+    SUPPORT_SET_URL = GITHUB_BASE + "support_set.npy"
+    SUPPORT_LABELS_URL = GITHUB_BASE + "support_labels.npy"
+    
+    try:
+        with st.spinner("Loading model from GitHub..."):
+            model = load_model_from_url(MODEL_URL)
+        
+        with st.spinner("Loading support set from GitHub..."):
+            support_set = load_numpy_from_url(SUPPORT_SET_URL)
+        
+        with st.spinner("Loading support labels from GitHub..."):
+            support_labels = load_numpy_from_url(SUPPORT_LABELS_URL)
+        
+        if model and support_set is not None and support_labels is not None:
+            st.success("✅ All resources loaded successfully from GitHub!")
+            return model, support_set, support_labels
+        else:
+            st.error("Failed to load one or more resources.")
+            return None, None, None
+            
+    except Exception as e:
+        st.error(f"Error loading from GitHub: {str(e)}")
+        return None, None, None
 
 # ==========================================================
 # 3. FUNGSI PREDIKSI (PERBAIKAN ERROR QUERY_SET)
