@@ -48,4 +48,36 @@ def predict_accent(audio_path, model, centroids):
     embedding = np.squeeze(embedding)
 
     distances = {}
-    for label, centroid in centroids.ite
+    for label, centroid in centroids.items():
+        centroid = np.squeeze(np.array(centroid))
+        distances[label] = np.linalg.norm(embedding - centroid)
+
+    return min(distances, key=distances.get)
+
+# ==========================================================
+# STREAMLIT UI
+# ==========================================================
+def main():
+    st.title("🎙️ Deteksi Aksen Bahasa Indonesia")
+
+    model = load_embedding_model()
+    centroids = load_centroids()
+    metadata = load_metadata()
+
+    audio_file = st.file_uploader("Upload Audio", type=["wav", "mp3"])
+
+    if audio_file:
+        st.audio(audio_file)
+
+        if st.button("🔍 Deteksi Aksen"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(audio_file.getbuffer())
+                tmp_path = tmp.name
+
+            hasil = predict_accent(tmp_path, model, centroids)
+            os.remove(tmp_path)
+
+            st.success(f"🎯 Aksen Terdeteksi: **{hasil}**")
+
+if __name__ == "__main__":
+    main()
