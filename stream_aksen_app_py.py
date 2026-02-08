@@ -1,131 +1,156 @@
-
-import tensorflow as tf
+import streamlit as st
 import numpy as np
+import pandas as pd
+import librosa
+import tempfile
 import os
+import tensorflow as tf
+from tensorflow.keras.models import load_model
 
-print("="*70)
-print("TEST MODEL LOADING & INSPECTION")
-print("="*70)
-
-# Check files
-print("\n1. CHECKING FILES...")
-files_needed = ['model_embedding_aksen.keras', 'support_set.npy', 'support_labels.npy']
-for f in files_needed:
-    exists = os.path.exists(f)
-    status = "✅" if exists else "❌"
-    print(f"  {status} {f}")
-    if exists and f.endswith('.npy'):
-        data = np.load(f)
-        print(f"      Shape: {data.shape}")
-
-if not os.path.exists('model_embedding_aksen.keras'):
-    print("\n❌ Model file tidak ditemukan!")
-    exit(1)
-
-# Define PrototypicalNetwork
-print("\n2. DEFINING CUSTOM CLASS...")
+# ==========================================================
+# 1. DEFINISI CLASS PROTOTYPICAL NETWORK
+# ==========================================================
 @tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, embedding_model=None, **kwargs):
         super(PrototypicalNetwork, self).__init__(**kwargs)
-        self.embedding_model = embedding_model
-    
-    def call(self, support_set, query_set, support_labels, n_way, training=None):
-        return -tf.ones((1, n_way))  # Dummy
-    
+        self.embedding = embedding_model
+
+    def call(self, support_set, query_set, support_labels, n_way):
+        # Memastikan embedding dipanggil dengan query_set
+        return self.embedding(query_set)
+
     def get_config(self):
-        return super().get_config()
+        config = super().get_config()
+        config.update({
+            "embedding_model": tf.keras.layers.serialize(self.embedding)
+        })
+        return config
 
-print("✅ PrototypicalNetwork defined")
+# ==========================================================
+# 2. FUNGSI LOAD DATA
+# ==========================================================
+@st.cache_resource
+def load_accent_model():
+    model_name = "model_embedding_aksen.keras"
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(current_dir, model_name)
 
-# Load model
-print("\n3. LOADING MODEL...")
-try:
-    custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
-    model = tf.keras.models.load_model(
-        "model_embedding_aksen.keras",
-        custom_objects=custom_objects,
-        compile=False
-    )
-    print("✅ Model loaded successfully")
-    print(f"   Type: {type(model).__name__}")
-    print(f"   Class: {model.__class__.__name__}")
-except Exception as e:
-    print(f"❌ Error loading model: {e}")
-    import traceback
-    traceback.print_exc()
-    exit(1)
+    if os.path.exists(model_path):
+        try:
+            custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+            # Load tanpa compile untuk stabilitas
+            model = tf.keras.models.load_model(model_path, custom_objects=custom_objects, compile=False)
+            return model
+        except Exception as e:
+            return None
+    return None
 
-# Inspect model
-print("\n4. INSPECTING MODEL ATTRIBUTES...")
-print("   Attributes (non-private):")
-attrs = [a for a in dir(model) if not a.startswith('_')]
-for attr in attrs[:20]:  # First 20
+@st.cache_data
+def load_metadata_df():
+    csv_path = "metadata.csv"
+    if os.path.exists(csv_path):
+        return pd.read_csv(csv_path)
+    return None
+
+# ==========================================================
+# 3. FUNGSI PREDIKSI (PERBAIKAN ERROR QUERY_SET)
+# ==========================================================
+def predict_accent(audio_path, model):
+    if model is None: return "Model tidak tersedia"
     try:
-        val = getattr(model, attr)
-        if not callable(val):
-            print(f"     - {attr}: {type(val).__name__}")
-    except:
-        pass
+        # Load & Preprocess
+        y, sr = librosa.load(audio_path, sr=16000)
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
+        mfcc_scaled = np.mean(mfcc.T, axis=0)
 
-# Check for embedding
-print("\n5. CHECKING FOR EMBEDDING...")
-embedding_found = False
+        # Sesuai error: Model Prototypical seringkali butuh input dalam bentuk list
+        # atau argumen bernama jika dibungkus class kustom
+        input_data = np.expand_dims(mfcc_scaled, axis=0)
 
-if hasattr(model, 'embedding'):
-    print(f"   ✅ model.embedding exists: {type(model.embedding)}")
-    embedding_found = True
-else:
-    print("   ❌ model.embedding NOT found")
+        # Mencoba prediksi langsung (seringkali model.predict cukup jika call() sudah benar)
+        prediction = model.predict(input_data)
 
-if hasattr(model, '_embedding_model'):
-    print(f"   ✅ model._embedding_model exists: {type(model._embedding_model)}")
-    embedding_found = True
-else:
-    print("   ❌ model._embedding_model NOT found")
+        aksen_classes = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
+        return aksen_classes[np.argmax(prediction)]
+    except Exception as e:
+        return f"Error Analisis: {str(e)}"
 
-if hasattr(model, 'embedding_model'):
-    print(f"   ✅ model.embedding_model exists: {type(model.embedding_model)}")
-    embedding_found = True
-else:
-    print("   ❌ model.embedding_model NOT found")
+# ==========================================================
+# 4. MAIN UI (WIDE LAYOUT & NEW ICONS)
+# ==========================================================
+def main():
+    # Set layout lebar agar tidak sempit
+    st.set_page_config(page_title="Deteksi Aksen Prototypical", page_icon="🎙️", layout="wide")
 
-# Check layers
-print("\n6. CHECKING LAYERS...")
-if hasattr(model, 'layers'):
-    print(f"   Total layers: {len(model.layers)}")
-    for i, layer in enumerate(model.layers[:10]):  # First 10
-        print(f"     [{i}] {layer.__class__.__name__}: {layer.name}")
-        if isinstance(layer, (tf.keras.Model, tf.keras.Sequential)):
-            print(f"         ^^ This is a Model/Sequential!")
-            embedding_found = True
-else:
-    print("   ❌ No layers attribute")
+    model_aksen = load_accent_model()
+    df_metadata = load_metadata_df()
 
-# Check weights
-print("\n7. CHECKING WEIGHTS...")
-if hasattr(model, 'weights'):
-    print(f"   Total weights: {len(model.weights)}")
-    for w in model.weights[:5]:
-        print(f"     - {w.name}: {w.shape}")
-else:
-    print("   ❌ No weights")
+    st.title("🎙️ Sistem Deteksi Aksen Prototypical Indonesia")
+    st.write("Aplikasi berbasis *Few-Shot Learning* untuk klasifikasi aksen daerah.")
+    st.divider()
 
-# Summary
-print("\n" + "="*70)
-print("SUMMARY")
-print("="*70)
-if embedding_found:
-    print("✅ Embedding layer FOUND in model!")
-else:
-    print("❌ Embedding layer NOT FOUND - will need to rebuild")
-    
-    # Show all object attributes
-    print("\nAll model.__dict__ keys:")
-    for key in model.__dict__.keys():
-        val = model.__dict__[key]
-        print(f"  {key}: {type(val).__name__}")
+    with st.sidebar:
+        st.header("🛸 Status Sistem")
+        if model_aksen:
+            st.success("🤖 Model: Terhubung")
+        else:
+            st.error("🚫 Model: Terputus")
 
-print("\n" + "="*70)
-print("TEST COMPLETED")
-print("="*70)
+        if df_metadata is not None:
+            st.success("📁 Metadata: Siap")
+        else:
+            st.warning("⚠️ Metadata: Kosong")
+
+        st.divider()
+        st.caption("Skripsi Project - 2026")
+
+    # Pembagian kolom agar lebar
+    col1, col2 = st.columns([1, 1.2])
+
+    with col1:
+        st.subheader("📥 Input Audio")
+        audio_file = st.file_uploader("Upload file (.wav, .mp3)", type=["wav", "mp3"])
+
+        if audio_file:
+            st.audio(audio_file)
+            # Tombol diperlebar agar proporsional
+            if st.button("🚀 Extract Feature and Detect", type="primary", use_container_width=True):
+                if model_aksen:
+                    with st.spinner("Menganalisis karakteristik suara..."):
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                            tmp.write(audio_file.getbuffer())
+                            tmp_path = tmp.name
+
+                        hasil_aksen = predict_accent(tmp_path, model_aksen)
+
+                        # Pencarian metadata
+                        user_info = None
+                        if df_metadata is not None:
+                            match = df_metadata[df_metadata['file_name'] == audio_file.name]
+                            if not match.empty:
+                                user_info = match.iloc[0].to_dict()
+
+                        with col2:
+                            st.subheader("📊 Hasil Analisis")
+                            # Gunakan container agar lebih rapi
+                            with st.container(border=True):
+                                st.markdown(f"#### 🎭 Aksen Terdeteksi:")
+                                st.info(f"**{hasil_aksen}**")
+
+                            st.divider()
+                            st.subheader("💎 Info Pembicara")
+                            if user_info:
+                                # Variasi emoticon baru
+                                st.markdown(f"🎂 **Usia:** {user_info.get('usia', '-')} Tahun")
+                                st.markdown(f"🚻 **Gender:** {user_info.get('gender', '-')}")
+                                st.markdown(f"🗺️ **Provinsi:** {user_info.get('provinsi', '-')}")
+                            else:
+                                st.warning("🕵️ Data file tidak terdaftar di metadata.csv")
+
+                        os.unlink(tmp_path)
+                else:
+                    st.error("Gagal memproses: Model tidak ditemukan.")
+
+if __name__ == "__main__":
+    main()
