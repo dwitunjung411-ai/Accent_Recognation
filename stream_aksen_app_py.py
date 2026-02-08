@@ -8,7 +8,7 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 
 # ==========================================================
-# 1. DEFINISI CLASS PROTOTYPICAL NETWORK
+# 1. DEFINISI CLASS PROTOTYPICAL NETWORK (DIPERBAIKI)
 # ==========================================================
 @tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
@@ -16,9 +16,17 @@ class PrototypicalNetwork(tf.keras.Model):
         super(PrototypicalNetwork, self).__init__(**kwargs)
         self.embedding = embedding_model
 
-    def call(self, support_set, query_set, support_labels, n_way):
-        # Memastikan embedding dipanggil dengan query_set
-        return self.embedding(query_set)
+    def call(self, inputs, training=None):
+        # PERBAIKAN: Terima input tunggal untuk inference
+        # Jika inputs adalah dict/tuple, ambil query_set
+        if isinstance(inputs, (list, tuple)):
+            query_set = inputs[1] if len(inputs) > 1 else inputs[0]
+        elif isinstance(inputs, dict):
+            query_set = inputs.get('query_set', inputs)
+        else:
+            query_set = inputs
+        
+        return self.embedding(query_set, training=training)
 
     def get_config(self):
         config = super().get_config()
@@ -39,10 +47,10 @@ def load_accent_model():
     if os.path.exists(model_path):
         try:
             custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
-            # Load tanpa compile untuk stabilitas
             model = tf.keras.models.load_model(model_path, custom_objects=custom_objects, compile=False)
             return model
         except Exception as e:
+            st.error(f"Error loading model: {str(e)}")
             return None
     return None
 
@@ -54,33 +62,36 @@ def load_metadata_df():
     return None
 
 # ==========================================================
-# 3. FUNGSI PREDIKSI (PERBAIKAN ERROR QUERY_SET)
+# 3. FUNGSI PREDIKSI (DIPERBAIKI)
 # ==========================================================
 def predict_accent(audio_path, model):
-    if model is None: return "Model tidak tersedia"
+    if model is None: 
+        return "Model tidak tersedia"
+    
     try:
         # Load & Preprocess
         y, sr = librosa.load(audio_path, sr=16000)
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
         mfcc_scaled = np.mean(mfcc.T, axis=0)
-
-        # Sesuai error: Model Prototypical seringkali butuh input dalam bentuk list
-        # atau argumen bernama jika dibungkus class kustom
+        
+        # Bentuk input data
         input_data = np.expand_dims(mfcc_scaled, axis=0)
-
-        # Mencoba prediksi langsung (seringkali model.predict cukup jika call() sudah benar)
-        prediction = model.predict(input_data)
-
+        
+        # PERBAIKAN: Prediksi langsung
+        prediction = model.predict(input_data, verbose=0)
+        
         aksen_classes = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
-        return aksen_classes[np.argmax(prediction)]
+        predicted_class = np.argmax(prediction)
+        
+        return aksen_classes[predicted_class]
+        
     except Exception as e:
         return f"Error Analisis: {str(e)}"
 
 # ==========================================================
-# 4. MAIN UI (WIDE LAYOUT & NEW ICONS)
+# 4. MAIN UI
 # ==========================================================
 def main():
-    # Set layout lebar agar tidak sempit
     st.set_page_config(page_title="Deteksi Aksen Prototypical", page_icon="🎙️", layout="wide")
 
     model_aksen = load_accent_model()
@@ -105,7 +116,6 @@ def main():
         st.divider()
         st.caption("Skripsi Project - 2026")
 
-    # Pembagian kolom agar lebar
     col1, col2 = st.columns([1, 1.2])
 
     with col1:
@@ -114,7 +124,6 @@ def main():
 
         if audio_file:
             st.audio(audio_file)
-            # Tombol diperlebar agar proporsional
             if st.button("🚀 Extract Feature and Detect", type="primary", use_container_width=True):
                 if model_aksen:
                     with st.spinner("Menganalisis karakteristik suara..."):
@@ -124,7 +133,6 @@ def main():
 
                         hasil_aksen = predict_accent(tmp_path, model_aksen)
 
-                        # Pencarian metadata
                         user_info = None
                         if df_metadata is not None:
                             match = df_metadata[df_metadata['file_name'] == audio_file.name]
@@ -133,7 +141,6 @@ def main():
 
                         with col2:
                             st.subheader("📊 Hasil Analisis")
-                            # Gunakan container agar lebih rapi
                             with st.container(border=True):
                                 st.markdown(f"#### 🎭 Aksen Terdeteksi:")
                                 st.info(f"**{hasil_aksen}**")
@@ -141,7 +148,6 @@ def main():
                             st.divider()
                             st.subheader("💎 Info Pembicara")
                             if user_info:
-                                # Variasi emoticon baru
                                 st.markdown(f"🎂 **Usia:** {user_info.get('usia', '-')} Tahun")
                                 st.markdown(f"🚻 **Gender:** {user_info.get('gender', '-')}")
                                 st.markdown(f"🗺️ **Provinsi:** {user_info.get('provinsi', '-')}")
