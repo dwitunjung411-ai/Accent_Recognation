@@ -8,67 +8,33 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 
 # ==========================================================
-# 1. DEFINISI CLASS PROTOTYPICAL NETWORK (DIPERBAIKI)
+# FUNGSI LOAD MODEL (ALTERNATIF - BYPASS PROTOTYPICAL)
 # ==========================================================
-# ==========================================================
-# 1. DEFINISI CLASS PROTOTYPICAL NETWORK (FIXED)
-# ==========================================================
-@tf.keras.utils.register_keras_serializable(package="Custom")
-class PrototypicalNetwork(tf.keras.Model):
-    def __init__(self, embedding_model=None, **kwargs):
-        super(PrototypicalNetwork, self).__init__(**kwargs)
-        if embedding_model is not None:
-            self.embedding = embedding_model
-        else:
-            self.embedding = None
+@st.cache_resource
+def load_accent_model():
+    model_name = "model_embedding_aksen.keras"
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(current_dir, model_name)
 
-    def call(self, inputs, training=None):
-        # PERBAIKAN: Cek apakah embedding adalah layer atau dict
-        if isinstance(inputs, (list, tuple)):
-            query_set = inputs[1] if len(inputs) > 1 else inputs[0]
-        elif isinstance(inputs, dict):
-            query_set = inputs.get('query_set', inputs)
-        else:
-            query_set = inputs
-        
-        # Jika embedding adalah dict (hasil load model), ambil layer sebenarnya
-        if isinstance(self.embedding, dict):
-            # Coba ekstrak layer dari dict
-            if 'config' in self.embedding:
-                # Reconstruct layer dari config
-                layer_config = self.embedding['config']
-                self.embedding = tf.keras.layers.deserialize(self.embedding)
-        
-        # Jika masih None atau dict, gunakan layer default
-        if self.embedding is None or isinstance(self.embedding, dict):
-            # Buat embedding layer sederhana sebagai fallback
-            if not hasattr(self, '_default_embedding'):
-                self._default_embedding = tf.keras.Sequential([
-                    tf.keras.layers.Dense(128, activation='relu'),
-                    tf.keras.layers.Dropout(0.3),
-                    tf.keras.layers.Dense(5, activation='softmax')
-                ])
-            return self._default_embedding(query_set, training=training)
-        
-        return self.embedding(query_set, training=training)
-
-    def get_config(self):
-        config = super().get_config()
-        if self.embedding is not None and not isinstance(self.embedding, dict):
-            config.update({
-                "embedding_model": tf.keras.layers.serialize(self.embedding)
-            })
-        return config
-
-    @classmethod
-    def from_config(cls, config):
-        embedding_config = config.pop("embedding_model", None)
-        if embedding_config:
-            embedding_model = tf.keras.layers.deserialize(embedding_config)
-        else:
-            embedding_model = None
-        return cls(embedding_model=embedding_model, **config)
-
+    if os.path.exists(model_path):
+        try:
+            custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+            full_model = tf.keras.models.load_model(model_path, custom_objects=custom_objects, compile=False)
+            
+            # BYPASS: Ekstrak layer embedding saja
+            if hasattr(full_model, 'embedding'):
+                if isinstance(full_model.embedding, dict):
+                    # Jika embedding adalah dict, gunakan full_model langsung
+                    return full_model
+                else:
+                    return full_model.embedding
+            
+            return full_model
+            
+        except Exception as e:
+            st.error(f"Error loading model: {str(e)}")
+            return None
+    return None
 # ==========================================================
 # 2. FUNGSI LOAD DATA
 # ==========================================================
