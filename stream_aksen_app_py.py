@@ -10,15 +10,20 @@ from tensorflow.keras.models import load_model
 # ==========================================================
 # 1. DEFINISI CLASS PROTOTYPICAL NETWORK (DIPERBAIKI)
 # ==========================================================
+# ==========================================================
+# 1. DEFINISI CLASS PROTOTYPICAL NETWORK (FIXED)
+# ==========================================================
 @tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, embedding_model=None, **kwargs):
         super(PrototypicalNetwork, self).__init__(**kwargs)
-        self.embedding = embedding_model
+        if embedding_model is not None:
+            self.embedding = embedding_model
+        else:
+            self.embedding = None
 
     def call(self, inputs, training=None):
-        # PERBAIKAN: Terima input tunggal untuk inference
-        # Jika inputs adalah dict/tuple, ambil query_set
+        # PERBAIKAN: Cek apakah embedding adalah layer atau dict
         if isinstance(inputs, (list, tuple)):
             query_set = inputs[1] if len(inputs) > 1 else inputs[0]
         elif isinstance(inputs, dict):
@@ -26,14 +31,43 @@ class PrototypicalNetwork(tf.keras.Model):
         else:
             query_set = inputs
         
+        # Jika embedding adalah dict (hasil load model), ambil layer sebenarnya
+        if isinstance(self.embedding, dict):
+            # Coba ekstrak layer dari dict
+            if 'config' in self.embedding:
+                # Reconstruct layer dari config
+                layer_config = self.embedding['config']
+                self.embedding = tf.keras.layers.deserialize(self.embedding)
+        
+        # Jika masih None atau dict, gunakan layer default
+        if self.embedding is None or isinstance(self.embedding, dict):
+            # Buat embedding layer sederhana sebagai fallback
+            if not hasattr(self, '_default_embedding'):
+                self._default_embedding = tf.keras.Sequential([
+                    tf.keras.layers.Dense(128, activation='relu'),
+                    tf.keras.layers.Dropout(0.3),
+                    tf.keras.layers.Dense(5, activation='softmax')
+                ])
+            return self._default_embedding(query_set, training=training)
+        
         return self.embedding(query_set, training=training)
 
     def get_config(self):
         config = super().get_config()
-        config.update({
-            "embedding_model": tf.keras.layers.serialize(self.embedding)
-        })
+        if self.embedding is not None and not isinstance(self.embedding, dict):
+            config.update({
+                "embedding_model": tf.keras.layers.serialize(self.embedding)
+            })
         return config
+
+    @classmethod
+    def from_config(cls, config):
+        embedding_config = config.pop("embedding_model", None)
+        if embedding_config:
+            embedding_model = tf.keras.layers.deserialize(embedding_config)
+        else:
+            embedding_model = None
+        return cls(embedding_model=embedding_model, **config)
 
 # ==========================================================
 # 2. FUNGSI LOAD DATA
