@@ -1,30 +1,51 @@
-@st.cache_resource
+import streamlit as st
+import numpy as np
+import pandas as pd
+import librosa
+import tempfile
+import os
+import tensorflow as tf
+
+# ==========================================================
+# LOAD MODEL
+# ==========================================================
+@st.cache(allow_output_mutation=True)
+def load_embedding_model():
+    return tf.keras.models.load_model("model_embedding_aksen.keras", compile=False)
+
+# ==========================================================
+# LOAD CENTROID
+# ==========================================================
+@st.cache(allow_output_mutation=True)
 def load_centroids():
     return np.load("accent_centroids.npy", allow_pickle=True).item()
-def predict_accent(audio_path, model):
-    try:
-        mfcc = extract_mfcc(audio_path)
-        mfcc = np.expand_dims(mfcc, axis=0)
 
-        # Ambil embedding
-        embedding = model.predict(mfcc)
-        embedding = np.asarray(embedding).squeeze()
+# ==========================================================
+# LOAD METADATA
+# ==========================================================
+@st.cache(allow_output_mutation=True)
+def load_metadata():
+    if os.path.exists("metadata.csv"):
+        return pd.read_csv("metadata.csv")
+    return None
 
-        centroids = load_centroids()
+# ==========================================================
+# MFCC
+# ==========================================================
+def extract_mfcc(audio_path):
+    y, sr = librosa.load(audio_path, sr=16000)
+    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
+    return np.mean(mfcc.T, axis=0)
 
-        distances = {}
-        for cls, centroid in centroids.items():
-            centroid = np.asarray(centroid).squeeze()
+# ==========================================================
+# PREDIKSI AKSEN
+# ==========================================================
+def predict_accent(audio_path, model, centroids):
+    mfcc = extract_mfcc(audio_path)
+    mfcc = np.expand_dims(mfcc, axis=0)
 
-            if embedding.shape != centroid.shape:
-                raise ValueError(
-                    f"Shape mismatch: embedding {embedding.shape} vs centroid {centroid.shape} for class {cls}"
-                )
+    embedding = model.predict(mfcc)
+    embedding = np.squeeze(embedding)
 
-            distances[cls] = np.linalg.norm(embedding - centroid)
-
-        predicted_class = min(distances, key=distances.get)
-        return predicted_class
-
-    except Exception as e:
-        return f"Error Analisis: {e}"
+    distances = {}
+    for label, centroid in centroids.ite
