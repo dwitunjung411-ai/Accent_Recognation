@@ -21,7 +21,7 @@ st.set_page_config(page_title="Deteksi Aksen & Metadata", layout="centered")
 @st.cache_resource
 def load_assets():
     model = tf.keras.models.load_model(
-        "model/pn_model.keras",
+        "model_ditek.keras",
         custom_objects={"PrototypicalNetwork": tf.keras.Model}
     )
 
