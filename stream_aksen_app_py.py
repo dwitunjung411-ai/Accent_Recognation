@@ -4,62 +4,57 @@ import pandas as pd
 import librosa
 import tensorflow as tf
 import os
+import tempfile
 
-# ================================
+# ==============================
 # CONFIG
-# ================================
+# ==============================
 SAMPLE_RATE = 16000
-N_MELS = 40
+N_MFCC = 40
 MAX_LEN = 300
 
-st.set_page_config(page_title="Deteksi Aksen", layout="centered")
+st.set_page_config(
+    page_title="Deteksi Aksen Bahasa Indonesia",
+    layout="centered"
+)
+
 st.title("🎙️ Deteksi Aksen Bahasa Indonesia")
+st.caption("Few-Shot Learning (Prototypical Network – Inference)")
 
-# ================================
-# PROTOTYPICAL NETWORK (INFERENCE)
-# ================================
-@tf.keras.utils.register_keras_serializable(package="Custom")
-class PrototypicalNetwork(tf.keras.Model):
-    def __init__(self, encoder, **kwargs):
-        super().__init__(**kwargs)
-        self.encoder = encoder
-
-    def call(self, x):
-        return self.encoder(x)
-
-# ================================
-# LOAD MODEL
-# ================================
+# ==============================
+# LOAD ENCODER MODEL
+# ==============================
 @st.cache_resource
-def load_proto_model():
-    return tf.keras.models.load_model(
-        "model/proto_model.h5",
-        custom_objects={"PrototypicalNetwork": PrototypicalNetwork}
-    )
+def load_encoder():
+    return tf.keras.models.load_model("model/encoder.h5")
 
-model = load_proto_model()
+encoder = load_encoder()
 
-# ================================
+# ==============================
 # FEATURE EXTRACTION
-# ================================
+# ==============================
 def extract_mfcc(audio_path):
     y, sr = librosa.load(audio_path, sr=SAMPLE_RATE)
+
     mfcc = librosa.feature.mfcc(
-        y=y, sr=sr, n_mfcc=N_MELS
+        y=y,
+        sr=sr,
+        n_mfcc=N_MFCC
     )
 
     mfcc = mfcc.T
+
     if mfcc.shape[0] > MAX_LEN:
         mfcc = mfcc[:MAX_LEN]
     else:
-        pad = MAX_LEN - mfcc.shape[0]
-        mfcc = np.pad(mfcc, ((0, pad), (0, 0)))
+        pad_len = MAX_LEN - mfcc.shape[0]
+        mfcc = np.pad(mfcc, ((0, pad_len), (0, 0)))
 
     return mfcc.astype(np.float32)
 
-# ================================
-# LOAD METADATA & PROTOTYPE
-# ================================
+# ==============================
+# BUILD PROTOTYPES
+# ==============================
 @st.cache_data
 def build_prototypes():
     df = pd.read_csv("data/metadata.csv")
@@ -68,62 +63,64 @@ def build_prototypes():
     counts = {}
 
     for _, row in df.iterrows():
-        path = os.path.join("data/audio", row["filename"])
-        aksen = row["aksen"]
+        audio_path = os.path.join("data/audio", row["filename"])
+        label = row["aksen"]
 
-        mfcc = extract_mfcc(path)
+        mfcc = extract_mfcc(audio_path)
         mfcc = np.expand_dims(mfcc, axis=0)
 
-        emb = model(mfcc).numpy()[0]
+        emb = encoder.predict(mfcc, verbose=0)[0]
 
-        if aksen not in embeddings:
-            embeddings[aksen] = emb
-            counts[aksen] = 1
+        if label not in embeddings:
+            embeddings[label] = emb
+            counts[label] = 1
         else:
-            embeddings[aksen] += emb
-            counts[aksen] += 1
+            embeddings[label] += emb
+            counts[label] += 1
 
-    for k in embeddings:
-        embeddings[k] /= counts[k]
+    for label in embeddings:
+        embeddings[label] /= counts[label]
 
     return embeddings
 
 prototypes = build_prototypes()
 labels = list(prototypes.keys())
 
-# ================================
+# ==============================
 # PREDICTION
-# ================================
+# ==============================
 def predict_accent(audio_path):
     mfcc = extract_mfcc(audio_path)
     mfcc = np.expand_dims(mfcc, axis=0)
 
-    query_emb = model(mfcc).numpy()[0]
+    query_emb = encoder.predict(mfcc, verbose=0)[0]
 
     distances = {}
     for label, proto in prototypes.items():
-        distances[label] = np.linalg.norm(query_emb - proto)
+        distances[label] = float(np.linalg.norm(query_emb - proto))
 
-    pred = min(distances, key=distances.get)
-    return pred, distances
+    pred_label = min(distances, key=distances.get)
+    return pred_label, distances
 
-# ================================
+# ==============================
 # STREAMLIT UI
-# ================================
+# ==============================
 uploaded_file = st.file_uploader(
-    "Upload audio (.wav)", type=["wav"]
+    "Upload audio (.wav)",
+    type=["wav"]
 )
 
-if uploaded_file:
-    with open("temp.wav", "wb") as f:
-        f.write(uploaded_file.read())
+if uploaded_file is not None:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        tmp.write(uploaded_file.read())
+        temp_audio_path = tmp.name
 
-    st.audio("temp.wav")
+    st.audio(temp_audio_path)
 
-    with st.spinner("Menganalisis aksen..."):
-        pred, dist = predict_accent("temp.wav")
+    with st.spinner("🔍 Menganalisis aksen..."):
+        pred, dist = predict_accent(temp_audio_path)
 
-    st.success(f"🗣️ Aksen terdeteksi: **{pred}**")
+    st.success(f"🗣️ **Aksen terdeteksi: {pred}**")
 
     st.subheader("📊 Jarak ke Prototype")
     st.json(dist)
