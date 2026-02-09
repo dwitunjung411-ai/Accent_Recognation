@@ -115,21 +115,42 @@ def main():
         if audio_file:
             st.audio(audio_file)
             # Tombol diperlebar agar proporsional
-            # Tambahkan prioritas/prioritized detection
-PRIORITY_ACCENTS = ['jakarta', 'sunda', 'jawa', 'bali', 'minang']
+            if st.button("🚀 Extract Feature and Detect", type="primary", use_container_width=True):
+                if model_aksen:
+                    with st.spinner("Menganalisis karakteristik suara..."):
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                            tmp.write(audio_file.getbuffer())
+                            tmp_path = tmp.name
 
-def detect_with_priority(query_features, support_set):
-    # Deteksi semua aksen
-    all_predictions = prototypical_network(query_features, support_set)
-    
-    # Jika confidence rendah untuk non-prioritas, cek prioritas dulu
-    if all_predictions['confidence'] < 0.7:
-        # Filter hanya aksen prioritas
-        priority_set = {k: v for k, v in support_set.items() 
-                       if k in PRIORITY_ACCENTS}
-        priority_pred = prototypical_network(query_features, priority_set)
-        
-        if priority_pred['confidence'] > 0.6:
-            return priority_pred
-    
-    return all_predictionsmain()
+                        hasil_aksen = predict_accent(tmp_path, model_aksen)
+
+                        # Pencarian metadata
+                        user_info = None
+                        if df_metadata is not None:
+                            match = df_metadata[df_metadata['file_name'] == audio_file.name]
+                            if not match.empty:
+                                user_info = match.iloc[0].to_dict()
+
+                        with col2:
+                            st.subheader("📊 Hasil Analisis")
+                            # Gunakan container agar lebih rapi
+                            with st.container(border=True):
+                                st.markdown(f"#### 🎭 Aksen Terdeteksi:")
+                                st.info(f"**{hasil_aksen}**")
+
+                            st.divider()
+                            st.subheader("💎 Info Pembicara")
+                            if user_info:
+                                # Variasi emoticon baru
+                                st.markdown(f"🎂 **Usia:** {user_info.get('usia', '-')} Tahun")
+                                st.markdown(f"🚻 **Gender:** {user_info.get('gender', '-')}")
+                                st.markdown(f"🗺️ **Provinsi:** {user_info.get('provinsi', '-')}")
+                            else:
+                                st.warning("🕵️ Data file tidak terdaftar di metadata.csv")
+
+                        os.unlink(tmp_path)
+                else:
+                    st.error("Gagal memproses: Model tidak ditemukan.")
+
+if __name__ == "__main__":
+    main()
