@@ -1,41 +1,63 @@
 import numpy as np
 import tensorflow as tf
 
-# --- MULAI COPY DARI SINI ---
-if uploaded_file is not None:
-    # 1. Ekstrak fitur dari file yang diupload
-    # (Pastikan fungsi extract_feature_v2 atau extract_feature sudah didefinisikan)
-    x_query = extract_feature(uploaded_file) 
-    
-    # 2. Reshape Query agar memiliki dimensi batch (Contoh: dari (193,) menjadi (1, 193))
-    # Ini WAJIB agar dianggap sebagai 1 sample data
-    query_set_input = np.expand_dims(x_query, axis=0)
-    
-    # 3. Siapkan semua input yang dibutuhkan model 'call'
-    # Model FSL kamu butuh 4 input sekaligus dalam satu list
-    input_paket = [
-        support_set_features,  # Data referensi (Support Set)
-        query_set_input,       # Data upload (Query Set) <-- INI YANG TADI MISSING
-        support_labels,        # Label angka untuk support set
-        n_way                  # Jumlah kelas (misal: 5)
-    ]
-
-    # 4. Lakukan Prediksi
-    # Kita panggil model(input_paket) langsung agar masuk ke logika 'call' yang melakukan unpacking
-    try:
-        logits = model(input_paket)
-        
-        # 5. Ambil hasil prediksi (Index kelas dengan probabilitas tertinggi)
-        prediction_index = np.argmax(logits.numpy(), axis=1)[0]
-        
-        # Mapping ke nama kelas (Pastikan variable 'classes' berisi nama aksen, misal ['Jawa', 'Sunda', ...])
-        hasil_prediksi = classes[prediction_index]
-        
-        # Tampilkan Hasil di Streamlit
-        st.success(f"Aksen Terdeteksi: {hasil_prediksi}")
-        
-    except Exception as e:
-        st.error(f"Terjadi error saat prediksi: {e}")
-        st.write("Debug shape:", query_set_input.shape)
-
-# --- SELESAI COPY ---
+# Tombol Prediksi
+if st.button("Extract Feature and Detect"):
+    if uploaded_file is not None:
+        try:
+            # 1. Tampilkan status loading
+            with st.spinner('Sedang mengekstrak fitur audio...'):
+                # Pastikan fungsi extract_feature ada dan mengembalikan array 1D
+                # Sesuaikan nama fungsi ini dengan yang ada di kodemu (misal: extract_feature_v2)
+                query_features = extract_feature(uploaded_file) 
+            
+            st.success("Ekstraksi fitur berhasil!")
+            
+            # 2. Persiapan Data untuk Model FSL
+            # Model FSL butuh dimensi (batch_size, n_features)
+            # Kita tambah dimensi agar jadi (1, 193) misalnya
+            query_set_input = np.expand_dims(query_features, axis=0)
+            
+            # DEBUG: Tampilkan shape data untuk memastikan benar
+            st.write("--- Debug Info ---")
+            st.write(f"Shape Support Set: {support_set.shape}") 
+            st.write(f"Shape Query Set (Input): {query_set_input.shape}")
+            
+            # 3. Prediksi
+            # Kita panggil model.call secara manual jika model.predict bermasalah
+            # Ini memotong jalur standar Keras dan langsung ke logika modelmu
+            
+            # Pastikan variable ini sudah ada sebelumnya:
+            # n_way = 5  (misalnya)
+            # support_labels = ... (label angka 0-4)
+            
+            logits = model.call(
+                support_set,        # Support set (referensi)
+                query_set_input,    # Query set (file upload)
+                support_labels,     # Label support set
+                n_way               # Jumlah kelas
+            )
+            
+            # 4. Ambil Hasil
+            # Logits biasanya bentuknya (1, n_way), kita ambil index terbesarnya
+            predicted_index = int(tf.argmax(logits, axis=1)[0])
+            
+            # Mapping ke nama kelas (Pastikan variable 'classes' ada)
+            # Contoh: classes = ['Batak', 'Jawa', 'Sunda', 'Minang', 'Madura']
+            hasil_prediksi = classes[predicted_index]
+            confidence = tf.nn.softmax(logits)[0][predicted_index] * 100
+            
+            # Tampilkan Hasil
+            st.success(f"✅ Aksen Terdeteksi: **{hasil_prediksi}**")
+            st.info(f"Confidence: {confidence:.2f}%")
+            
+        except Exception as e:
+            st.error("Terjadi Kesalahan (Error):")
+            st.code(e) # Ini akan menampilkan pesan error lengkap
+            st.warning("""
+            Tips Perbaikan:
+            1. Cek 'Debug Info' di atas. Apakah shape Query Set sama jumlah fiturnya dengan Support Set?
+            2. Pastikan 'support_set' dan 'support_labels' sudah diload dengan benar di awal script.
+            """)
+    else:
+        st.warning("Silakan upload file audio terlebih dahulu.")
