@@ -1,175 +1,139 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 import librosa
+import tempfile
 import os
-import joblib
+import tensorflow as tf
+from tensorflow.keras.models import load_model
 
-# ===============================
-# CONFIG
-# ===============================
-SR = 22050
-N_MFCC = 40
-MAX_LEN = 174
+# ==========================================================
+# 1. DEFINISI CLASS PROTOTYPICAL NETWORK
+# ==========================================================
+@tf.keras.utils.register_keras_serializable(package="Custom")
+class PrototypicalNetwork(tf.keras.Model):
+    def __init__(self, embedding_model=None, **kwargs):
+        super(PrototypicalNetwork, self).__init__(**kwargs)
+        self.embedding = embedding_model
 
-st.set_page_config(page_title="Deteksi Aksen & Metadata", layout="centered")
+    def call(self, support_set, query_set, support_labels, n_way):
+        return self.embedding(query_set)
 
-# ===============================
-# LOAD ASSETS
-# ===============================
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "embedding_model": tf.keras.layers.serialize(self.embedding)
+        })
+        return config
+
+# ==========================================================
+# 2. FUNGSI LOAD DATA (MODEL & METADATA)
+# ==========================================================
 @st.cache_resource
-def load_assets():
-    model = tf.keras.models.load_model(
-        "model_ditek.keras",
-        custom_objects={"PrototypicalNetwork": tf.keras.Model}
-    )
+def load_accent_model():
+    model_name = "model_detect_aksen.keras"
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(current_dir, model_name)
 
-    le_aksen = joblib.load("model/le_aksen.pkl")
-    le_gender = joblib.load("model/le_gender.pkl")
-    le_provinsi = joblib.load("model/le_provinsi.pkl")
-    scaler_usia = joblib.load("model/scaler_usia.pkl")
-    ohe = joblib.load("model/ohe.pkl")
+    if os.path.exists(model_path):
+        try:
+            custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+            model = tf.keras.models.load_model(model_path, custom_objects=custom_objects, compile=False)
+            return model
+        except Exception as e:
+            st.error(f"❌ Gagal memuat model: {e}")
+            return None
+    return None
 
-    metadata = pd.read_csv("metadata.csv")
+@st.cache_data
+def load_metadata_df():
+    csv_path = "metadata.csv"
+    if os.path.exists(csv_path):
+        return pd.read_csv(csv_path)
+    return None
 
-    return model, le_aksen, le_gender, le_provinsi, scaler_usia, ohe, metadata
+# ==========================================================
+# 3. FUNGSI PREDIKSI
+# ==========================================================
+def predict_accent(audio_path, model):
+    if model is None: return "Model tidak tersedia"
+    try:
+        y, sr = librosa.load(audio_path, sr=16000)
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
+        mfcc_scaled = np.mean(mfcc.T, axis=0)
+        input_data = np.expand_dims(mfcc_scaled, axis=0)
 
+        prediction = model.predict(input_data)
+        aksen_classes = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
+        return aksen_classes[np.argmax(prediction)]
+    except Exception as e:
+        return f"Error Analisis: {str(e)}"
 
-# ===============================
-# FEATURE EXTRACTION
-# ===============================
-def extract_mfcc(file_path):
-    y, sr = librosa.load(file_path, sr=SR)
-    y = librosa.util.normalize(y)
+# ==========================================================
+# 4. MAIN UI (PENGATURAN LEBAR & PEMBERSIHAN)
+# ==========================================================
+def main():
+    # Menambahkan layout="wide" untuk memperlebar tampilan
+    st.set_page_config(page_title="Deteksi Aksen Prototypical", page_icon="🎙️", layout="wide")
 
-    mfcc = librosa.feature.mfcc(
-        y=y,
-        sr=sr,
-        n_mfcc=N_MFCC,
-        n_fft=2048,
-        hop_length=512
-    )
+    model_aksen = load_accent_model()
+    df_metadata = load_metadata_df()
 
-    delta = librosa.feature.delta(mfcc)
-    delta2 = librosa.feature.delta(mfcc, order=2)
+    st.title("🎙️ Accent Recognation")
+    st.divider()
 
-    if mfcc.shape[1] < MAX_LEN:
-        pad = MAX_LEN - mfcc.shape[1]
-        mfcc = np.pad(mfcc, ((0, 0), (0, pad)))
-        delta = np.pad(delta, ((0, 0), (0, pad)))
-        delta2 = np.pad(delta2, ((0, 0), (0, pad)))
-    else:
-        mfcc = mfcc[:, :MAX_LEN]
-        delta = delta[:, :MAX_LEN]
-        delta2 = delta2[:, :MAX_LEN]
+    with st.sidebar:
+        st.header("⚙️ Status Sistem")
+        if model_aksen:
+            st.success("Model: Online")
+        else:
+            st.error("Model: Offline")
 
-    return np.stack([mfcc, delta, delta2], axis=-1)
+    # Mengatur perbandingan kolom (misal 1:1.2 agar kolom hasil lebih lega)
+    col1, col2 = st.columns([1, 1.2])
 
+    with col1:
+        st.subheader("📤 Input Audio")
+        audio_file = st.file_uploader("Upload file (.wav, .mp3)", type=["wav", "mp3"])
 
-# ===============================
-# STREAMLIT UI
-# ===============================
-st.title("🎙️ Deteksi Aksen, Usia, Gender & Provinsi")
-st.write("Upload audio `.wav` → sistem akan membaca metadata & mendeteksi aksen")
+        if audio_file:
+            st.audio(audio_file)
+            if st.button("🚀 Extract Feature and  Detect", type="primary", use_container_width=True):
+                if model_aksen:
+                    with st.spinner("Sedang memproses..."):
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                            tmp.write(audio_file.getbuffer())
+                            tmp_path = tmp.name
 
-uploaded_file = st.file_uploader("Upload Audio WAV", type=["wav"])
+                        # Jalankan fungsi prediksi
+                        hasil_aksen = predict_accent(tmp_path, model_aksen)
 
-if uploaded_file:
-    temp_path = "temp.wav"
-    with open(temp_path, "wb") as f:
-        f.write(uploaded_file.read())
+                        # Pencarian metadata berdasarkan nama file
+                        user_info = None
+                        if df_metadata is not None:
+                            match = df_metadata[df_metadata['file_name'] == audio_file.name]
+                            if not match.empty:
+                                user_info = match.iloc[0].to_dict()
 
-    st.audio(temp_path)
+                        with col2:
+                            st.subheader("📊 Hasil Analisis")
+                            # Box hasil aksen
+                            st.info(f"### Aksen Terdeteksi: **{hasil_aksen}**")
 
-    model, le_aksen, le_gender, le_provinsi, scaler_usia, ohe, metadata = load_assets()
+                            st.write("---")
+                            st.subheader("🔹Info Pembicara")
+                            if user_info:
+                                st.write(f"📅Usia: {user_info.get('usia', '-')}")
+                                st.write(f"🗣️Gender: {user_info.get('gender', '-')}")
+                                st.write(f"📍Provinsi: {user_info.get('provinsi', '-')}")
+                            else:
+                                st.warning("Data file ini tidak terdaftar di metadata.csv")
 
-    file_name = uploaded_file.name
+                        # Hapus temporary file
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
+                else:
+                    st.error("Model gagal dimuat. Cek log server.")
 
-    # ===============================
-    # METADATA LOOKUP
-    # ===============================
-    row = metadata[metadata["file_name"] == file_name]
-
-    if row.empty:
-        st.error("❌ File tidak ditemukan di metadata.csv")
-        st.stop()
-
-    usia = row["usia"].values[0]
-    gender = row["gender"].values[0]
-    provinsi = row["provinsi"].values[0]
-
-    # ===============================
-    # FEATURE BUILDING
-    # ===============================
-    mfcc_feat = extract_mfcc(temp_path)
-
-    usia_scaled = scaler_usia.transform([[usia]])
-    cat_encoded = ohe.transform([[gender, provinsi]])
-
-    meta = np.hstack([usia_scaled, cat_encoded]).astype(np.float32)
-    meta = meta[:, None, None, :]
-    meta = np.repeat(meta, mfcc_feat.shape[0], axis=1)
-    meta = np.repeat(meta, mfcc_feat.shape[1], axis=2)
-
-    X = np.concatenate([mfcc_feat[None, ...], meta], axis=-1)
-    X = tf.convert_to_tensor(X, dtype=tf.float32)
-
-    # ===============================
-    # SUPPORT SET (STATIC SAMPLING)
-    # ===============================
-    support_idx = metadata.sample(15).index
-    support_files = metadata.loc[support_idx, "file_name"]
-
-    support_features = []
-    support_labels = []
-
-    for i, f in zip(support_idx, support_files):
-        path = f
-        if not os.path.exists(path):
-            continue
-
-        feat = extract_mfcc(path)
-        usia_i = metadata.loc[i, "usia"]
-        gender_i = metadata.loc[i, "gender"]
-        prov_i = metadata.loc[i, "provinsi"]
-
-        usia_s = scaler_usia.transform([[usia_i]])
-        cat_s = ohe.transform([[gender_i, prov_i]])
-        meta_s = np.hstack([usia_s, cat_s]).astype(np.float32)
-        meta_s = meta_s[:, None, None, :]
-        meta_s = np.repeat(meta_s, feat.shape[0], axis=1)
-        meta_s = np.repeat(meta_s, feat.shape[1], axis=2)
-
-        final = np.concatenate([feat[None, ...], meta_s], axis=-1)
-        support_features.append(final[0])
-        support_labels.append(le_aksen.transform([metadata.loc[i, "label_aksen"]])[0])
-
-    support_tensor = tf.convert_to_tensor(np.array(support_features), dtype=tf.float32)
-    support_labels = tf.convert_to_tensor(support_labels, dtype=tf.int32)
-
-    # ===============================
-    # PREDICTION
-    # ===============================
-    logits = model.call(
-        support_tensor,
-        X,
-        support_labels,
-        n_way=len(le_aksen.classes_)
-    )
-
-    pred_idx = tf.argmax(logits, axis=1).numpy()[0]
-    pred_aksen = le_aksen.inverse_transform([pred_idx])[0]
-
-    # ===============================
-    # OUTPUT
-    # ===============================
-    st.success("✅ Prediksi Berhasil")
-
-    st.markdown(f"""
-    ### 🧾 Hasil Deteksi
-    - **Aksen** : **{pred_aksen}**
-    - **Usia** : {usia}
-    - **Gender** : {gender}
-    - **Provinsi** : {provinsi}
-    """)
+if __name__ == "__main__":
+    main()
