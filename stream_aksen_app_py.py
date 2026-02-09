@@ -32,7 +32,7 @@ class PrototypicalNetwork(tf.keras.Model):
 # ==========================================================
 @st.cache_resource
 def load_accent_model():
-    model_name = "model_detect_aksen.keras"
+    model_name = "model_embedding_aksen.keras"
     # Gunakan path relatif yang lebih aman untuk deployment
     model_path = os.path.join(os.getcwd(), model_name)
 
