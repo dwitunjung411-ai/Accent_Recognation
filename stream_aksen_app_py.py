@@ -8,9 +8,8 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 
 # ==========================================================
-# 1. DEFINISI CLASS PROTOTYPICAL NETWORK
+# 1. DEFINISI CLASS PROTOTYPICAL NETWORK (TANPA DECORATOR)
 # ==========================================================
-@tf.keras.utils.register_keras_serializable(package="Custom")
 class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, embedding_model=None, **kwargs):
         super(PrototypicalNetwork, self).__init__(**kwargs)
@@ -28,6 +27,11 @@ class PrototypicalNetwork(tf.keras.Model):
             }
         )
         return config
+    
+    @classmethod
+    def from_config(cls, config):
+        embedding_model = tf.keras.layers.deserialize(config.pop("embedding_model"))
+        return cls(embedding_model=embedding_model, **config)
 
 
 # ==========================================================
@@ -35,12 +39,13 @@ class PrototypicalNetwork(tf.keras.Model):
 # ==========================================================
 @st.cache_resource
 def load_accent_model():
-    model_name = "model_detect_aksen.keras"
+    model_name = "model_detect_aksen.keras"  # Nama model sesuai permintaan
     current_dir = os.getcwd()
     model_path = os.path.join(current_dir, model_name)
 
     if os.path.exists(model_path):
         try:
+            # Daftarkan custom object saat load, bukan saat definisi class
             custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
             # Load tanpa compile untuk stabilitas
             model = tf.keras.models.load_model(
@@ -48,7 +53,10 @@ def load_accent_model():
             )
             return model
         except Exception as e:
+            st.error(f"Error loading model: {e}")
             return None
+    else:
+        st.error(f"Model tidak ditemukan di: {model_path}")
     return None
 
 
@@ -64,7 +72,8 @@ def load_metadata_df():
 # 3. FUNGSI PREDIKSI (PERBAIKAN ERROR QUERY_SET)
 # ==========================================================
 def predict_accent(audio_path, model):
-    if model is None: return "Model tidak tersedia"
+    if model is None: 
+        return "Model tidak tersedia"
     try:
         # Load & Preprocess
         y, sr = librosa.load(audio_path, sr=16000)
@@ -76,7 +85,7 @@ def predict_accent(audio_path, model):
         input_data = np.expand_dims(mfcc_scaled, axis=0)
 
         # Mencoba prediksi langsung (seringkali model.predict cukup jika call() sudah benar)
-        prediction = model.predict(input_data)
+        prediction = model.predict(input_data, verbose=0)
 
         aksen_classes = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
         return aksen_classes[np.argmax(prediction)]
