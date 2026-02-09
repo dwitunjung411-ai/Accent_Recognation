@@ -7,31 +7,46 @@ import os
 import tensorflow as tf
 
 # ==========================================================
-# 1. CUSTOM CLASS (TANPA REGISTER SERIALIZABLE)
+# 1. CUSTOM MODEL CLASS (JANGAN PAKAI DECORATOR)
 # ==========================================================
 class PrototypicalNetwork(tf.keras.Model):
     def __init__(self, embedding_model=None, **kwargs):
         super().__init__(**kwargs)
         self.embedding = embedding_model
 
-    def call(self, support_set, query_set, support_labels, n_way):
+    def call(self, support_set, query_set, support_labels=None, n_way=None):
+        # inference only
         return self.embedding(query_set)
 
 # ==========================================================
-# 2. LOAD MODEL & METADATA
+# 2. LOAD MODEL
 # ==========================================================
-@st.cache_resource
 def load_accent_model():
     model_path = "model_ditek.keras"
+
+    # DEBUG (boleh dihapus setelah normal)
+    st.write("📂 File di direktori:", os.listdir("."))
+    st.write("📦 Model path:", model_path)
+    st.write("✅ Exists:", os.path.exists(model_path))
+
     if not os.path.exists(model_path):
+        st.error("❌ File model_ditek.keras tidak ditemukan")
         return None
 
-    return tf.keras.models.load_model(
-        model_path,
-        custom_objects={"PrototypicalNetwork": PrototypicalNetwork},
-        compile=False
-    )
+    try:
+        model = tf.keras.models.load_model(
+            model_path,
+            custom_objects={"PrototypicalNetwork": PrototypicalNetwork},
+            compile=False
+        )
+        return model
+    except Exception as e:
+        st.error(f"❌ Gagal load model: {e}")
+        return None
 
+# ==========================================================
+# 3. LOAD METADATA
+# ==========================================================
 @st.cache_data
 def load_metadata():
     if os.path.exists("metadata.csv"):
@@ -39,26 +54,35 @@ def load_metadata():
     return None
 
 # ==========================================================
-# 3. FEATURE EXTRACTION
+# 4. FEATURE EXTRACTION
 # ==========================================================
 def extract_mfcc(audio_path):
     y, sr = librosa.load(audio_path, sr=16000)
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
-    return np.mean(mfcc.T, axis=0)
+    mfcc_mean = np.mean(mfcc.T, axis=0)
+    return mfcc_mean
 
 # ==========================================================
-# 4. PREDIKSI AKSEN
+# 5. PREDIKSI AKSEN
 # ==========================================================
 def predict_accent(audio_path, model):
     features = extract_mfcc(audio_path)
     X = np.expand_dims(features, axis=0)
+
     preds = model.predict(X)
 
-    aksen_labels = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
+    aksen_labels = [
+        "Sunda",
+        "Jawa Tengah",
+        "Jawa Timur",
+        "Yogyakarta",
+        "Betawi"
+    ]
+
     return aksen_labels[np.argmax(preds)]
 
 # ==========================================================
-# 5. STREAMLIT UI
+# 6. STREAMLIT UI
 # ==========================================================
 def main():
     st.set_page_config(
@@ -67,18 +91,22 @@ def main():
         layout="wide"
     )
 
-    model = load_accent_model()
-    metadata = load_metadata()
-
     st.title("🎙️ Accent Recognition System")
     st.divider()
 
+    model = load_accent_model()
+    metadata = load_metadata()
+
     with st.sidebar:
-        st.header("⚙️ System Status")
-        st.success("Model Loaded") if model else st.error("Model Not Found")
+        st.header("⚙️ Status Sistem")
+        if model:
+            st.success("Model: Loaded")
+        else:
+            st.error("Model: Not Loaded")
 
     col1, col2 = st.columns([1, 1.2])
 
+    # ===================== INPUT =====================
     with col1:
         st.subheader("📤 Upload Audio")
         audio_file = st.file_uploader(
@@ -91,7 +119,7 @@ def main():
 
             if st.button("🚀 Detect Accent", use_container_width=True):
                 if model is None:
-                    st.error("Model gagal dimuat")
+                    st.error("Model tidak tersedia")
                     return
 
                 with st.spinner("Menganalisis suara..."):
@@ -99,20 +127,23 @@ def main():
                         tmp.write(audio_file.getbuffer())
                         tmp_path = tmp.name
 
+                    # Prediksi
                     hasil_aksen = predict_accent(tmp_path, model)
 
+                    # Ambil metadata
                     user_info = None
                     if metadata is not None:
                         row = metadata[metadata["file_name"] == audio_file.name]
                         if not row.empty:
                             user_info = row.iloc[0]
 
+                    # ===================== OUTPUT =====================
                     with col2:
                         st.subheader("📊 Hasil Analisis")
                         st.success(f"### 🗣️ Aksen: **{hasil_aksen}**")
 
                         st.divider()
-                        st.subheader("👤 Metadata Pembicara")
+                        st.subheader("👤 Informasi Pembicara")
 
                         if user_info is not None:
                             st.write(f"📅 **Usia** : {user_info['usia']}")
@@ -123,5 +154,6 @@ def main():
 
                     os.remove(tmp_path)
 
+# ==========================================================
 if __name__ == "__main__":
     main()
