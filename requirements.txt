@@ -1,6 +1,7 @@
 streamlit
-librosa
-tensorflow
 numpy
 pandas
-matplotlib
+librosa
+soundfile
+scikit-learn
+tensorflow-cpu==2.12.0
