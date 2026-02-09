@@ -6,70 +6,82 @@ import tempfile
 import os
 
 # ==========================================================
-# LOAD MODEL PALING SEDERHANA - FIX REGISTRATION ERROR
+# LOAD MODEL - FIX COMPATIBILITY
 # ==========================================================
 @st.cache_resource
 def load_accent_model():
     import tensorflow as tf
     
-    # BERSIHKAN REGISTRASI SEBELUMNYA JIKA ADA
-    # Ini mencegah error "has already been registered"
-    registered_name = "Custom>PrototypicalNetwork"
-    if registered_name in tf.keras.saving.object_registration._GLOBAL_CUSTOM_OBJECTS:
-        del tf.keras.saving.object_registration._GLOBAL_CUSTOM_OBJECTS[registered_name]
-    
     model_path = "model_detect_aksen.keras"
     
-    # Cek file ada atau tidak
     if not os.path.exists(model_path):
         st.sidebar.error(f"❌ File '{model_path}' tidak ditemukan")
         return None
     
+    # Definisikan class PrototypicalNetwork untuk custom_objects
+    class PrototypicalNetwork(tf.keras.Model):
+        def __init__(self, embedding_model=None, **kwargs):
+            super().__init__(**kwargs)
+            self.embedding = embedding_model
+        
+        def call(self, inputs, training=None):
+            # Handle berbagai format input
+            if isinstance(inputs, list):
+                return self.embedding(inputs[0])
+            return self.embedding(inputs)
+        
+        def get_config(self):
+            config = super().get_config()
+            config.update({
+                "embedding_model": tf.keras.layers.serialize(self.embedding) if self.embedding else None
+            })
+            return config
+        
+        @classmethod
+        def from_config(cls, config):
+            embedding_config = config.pop("embedding_model", None)
+            if embedding_config:
+                embedding_model = tf.keras.layers.deserialize(embedding_config)
+            else:
+                embedding_model = None
+            return cls(embedding_model=embedding_model, **config)
+    
     try:
-        # Load langsung tanpa apapun
-        model = tf.keras.models.load_model(model_path, compile=False)
+        # Coba load dengan custom_objects
+        model = tf.keras.models.load_model(
+            model_path, 
+            compile=False,
+            custom_objects={"PrototypicalNetwork": PrototypicalNetwork}
+        )
         st.sidebar.success("✅ Model loaded")
         return model
+        
     except Exception as e1:
         error_msg = str(e1)
+        st.sidebar.warning(f"Attempt 1 failed: {error_msg[:80]}")
         
-        # Jika error karena custom object, coba dengan custom_objects
-        if "PrototypicalNetwork" in error_msg or "custom" in error_msg.lower():
+        # Jika error karena registrasi, coba load tanpa custom_objects
+        try:
+            model = tf.keras.models.load_model(model_path, compile=False)
+            st.sidebar.success("✅ Model loaded (no custom_objects)")
+            return model
+            
+        except Exception as e2:
+            st.sidebar.warning(f"Attempt 2 failed: {str(e2)[:80]}")
+            
+            # Coba dengan safe_mode=False
             try:
-                # Definisikan class minimal untuk load model
-                class PrototypicalNetwork(tf.keras.Model):
-                    def __init__(self, embedding_model=None, **kwargs):
-                        super().__init__(**kwargs)
-                        self.embedding = embedding_model
-                    
-                    def call(self, inputs):
-                        return self.embedding(inputs)
-                    
-                    def get_config(self):
-                        config = super().get_config()
-                        config.update({"embedding_model": tf.keras.layers.serialize(self.embedding)})
-                        return config
-                
                 model = tf.keras.models.load_model(
                     model_path, 
                     compile=False, 
-                    custom_objects={"PrototypicalNetwork": PrototypicalNetwork}
+                    safe_mode=False
                 )
-                st.sidebar.success("✅ Model loaded (with custom_objects)")
+                st.sidebar.success("✅ Model loaded (safe_mode=False)")
                 return model
                 
-            except Exception as e2:
-                st.sidebar.error(f"❌ Custom object fail: {str(e2)[:100]}")
+            except Exception as e3:
+                st.sidebar.error(f"❌ All attempts failed: {str(e3)[:150]}")
                 return None
-        
-        # Coba dengan safe_mode=False untuk model yang tidak compatible
-        try:
-            model = tf.keras.models.load_model(model_path, compile=False, safe_mode=False)
-            st.sidebar.success("✅ Model loaded (safe_mode=False)")
-            return model
-        except Exception as e3:
-            st.sidebar.error(f"❌ Gagal load: {str(e3)[:150]}")
-            return None
 
 # ==========================================================
 # LOAD METADATA
@@ -165,3 +177,5 @@ with col1:
                     os.unlink(path)
             else:
                 st.error("Model tidak tersedia")
+                # Tambahkan ini di awal function untuk debug
+                st.sidebar.write(f"TF version: {tf.__version__}")
