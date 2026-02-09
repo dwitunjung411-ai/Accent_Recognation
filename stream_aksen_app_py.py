@@ -1,12 +1,6 @@
-# ==========================================================
-# 0. FORCE CPU (WAJIB UNTUK STREAMLIT CLOUD)
-# ==========================================================
+
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
-# ==========================================================
-# 1. IMPORT LIBRARY
-# ==========================================================
 import streamlit as st
 import numpy as np
 import pandas as pd
