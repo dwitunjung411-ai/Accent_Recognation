@@ -8,6 +8,9 @@ import os
 # ==========================================================
 # LOAD MODEL PALING SEDERHANA
 # ==========================================================
+# ==========================================================
+# LOAD MODEL PALING SEDERHANA
+# ==========================================================
 @st.cache_resource
 def load_accent_model():
     import tensorflow as tf
@@ -20,18 +23,55 @@ def load_accent_model():
         return None
     
     try:
-        # Load langsung tanpa apapun
-        model = tf.keras.models.load_model(model_path, compile=False)
-        st.sidebar.success("✅ Model loaded")
+        # Define custom class untuk menghindari error registrasi
+        from keras.saving import register_keras_serializable
+        
+        # Definisikan kelas PrototypicalNetwork secara lokal
+        @register_keras_serializable(package="Custom", name="CustomPrototypicalNetwork")
+        class PrototypicalNetwork(tf.keras.Model):
+            def __init__(self, encoder, **kwargs):
+                super(PrototypicalNetwork, self).__init__(**kwargs)
+                self.encoder = encoder
+            
+            def call(self, inputs):
+                return self.encoder(inputs)
+            
+            def get_config(self):
+                config = super().get_config()
+                config.update({"encoder": self.encoder})
+                return config
+            
+            @classmethod
+            def from_config(cls, config):
+                return cls(**config)
+        
+        # Daftarkan custom objects
+        custom_objects = {
+            "PrototypicalNetwork": PrototypicalNetwork,
+            "CustomPrototypicalNetwork": PrototypicalNetwork
+        }
+        
+        # Load model dengan custom_objects
+        model = tf.keras.models.load_model(
+            model_path, 
+            compile=False,
+            custom_objects=custom_objects
+        )
+        st.sidebar.success("✅ Model loaded with custom objects")
         return model
-    except:
+        
+    except Exception as e:
         try:
             # Coba dengan safe_mode=False
-            model = tf.keras.models.load_model(model_path, compile=False, safe_mode=False)
+            model = tf.keras.models.load_model(
+                model_path, 
+                compile=False, 
+                safe_mode=False
+            )
             st.sidebar.success("✅ Model loaded (safe_mode=False)")
             return model
-        except Exception as e:
-            st.sidebar.error(f"❌ Gagal load: {str(e)[:100]}")
+        except Exception as e2:
+            st.sidebar.error(f"❌ Gagal load: {str(e)[:100]}... {str(e2)[:100]}")
             return None
 
 # ==========================================================
