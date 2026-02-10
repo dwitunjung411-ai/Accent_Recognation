@@ -84,7 +84,7 @@ class PrototypicalNetwork(tf.keras.Model):
 # ==========================================================
 @st.cache_resource
 def load_accent_model():
-    model_name = "model_embedding_aksen.keras"
+    model_name = "model_detect_aksen.keras"
     current_dir = os.getcwd()
     model_path = os.path.join(current_dir, model_name)
     
