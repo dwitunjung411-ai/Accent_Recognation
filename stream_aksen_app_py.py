@@ -1,376 +1,454 @@
 import streamlit as st
 import numpy as np
-import tensorflow as tf
+import pandas as pd
 import librosa
-import soundfile as sf
 import tempfile
 import os
-import warnings
-import sys
+import tensorflow as tf
+from tensorflow.keras.models import load_model
 
-# ===== FIX: Handle pkg_resources import error =====
-try:
-    import pkg_resources
-except ImportError:
-    # Fallback for environments without pkg_resources
-    import importlib.metadata as metadata
-    # Create a mock pkg_resources if needed
-    class MockPkgResources:
-        @staticmethod
-        def get_distribution(name):
-            class Dist:
-                version = "0.0.0"
-            return Dist()
+# ==========================================================
+# 1. DEFINISI CLASS PROTOTYPICAL NETWORK YANG BENAR
+# ==========================================================
+@tf.keras.utils.register_keras_serializable(package="Custom")
+class PrototypicalNetwork(tf.keras.Model):
+    def __init__(self, encoder, **kwargs):
+        super(PrototypicalNetwork, self).__init__(**kwargs)
+        self.encoder = encoder  # Ini seharusnya model encoder
     
-    sys.modules['pkg_resources'] = MockPkgResources()
-    import pkg_resources
-# ===== END FIX =====
-
-from sklearn.preprocessing import LabelEncoder
-warnings.filterwarnings('ignore')
-
-# Set page config
-st.set_page_config(
-    page_title="Deteksi Aksen Bahasa Indonesia",
-    page_icon="🗣️",
-    layout="wide"
-)
-
-# Title and description
-st.title("🗣️ Deteksi Aksen Bahasa Indonesia")
-st.markdown("""
-Aplikasi ini mendeteksi aksen bahasa Indonesia dari 5 daerah:
-1. **Betawi** - DKI Jakarta
-2. **Jawa Timur** - Jawa Timur  
-3. **Jawa Tengah** - Jawa Tengah
-4. **Sunda** - Jawa Barat
-5. **Yogyakarta** - D.I. Yogyakarta
-""")
-
-# Sidebar for information
-with st.sidebar:
-    st.header("ℹ️ Informasi Aplikasi")
+    def call(self, inputs):
+        # Untuk prediksi inference, cukup encode input
+        return self.encoder(inputs)
     
-    st.subheader("Aksen yang didukung:")
-    aksen_list = [
-        "Betawi - DKI Jakarta",
-        "Jawa Timur - Jawa Timur",
-        "Jawa Tengah - Jawa Tengah",  # Fixed: was "Jawa Timur"
-        "Sunda - Jawa Barat",
-        "Yogyakarta - D.I. Yogyakarta"
-    ]
-    for aksen in aksen_list:
-        st.write(f"• {aksen}")
-    
-    st.subheader("Cara penggunaan:")
-    st.write("1. Unggah file audio (.wav)")
-    st.write("2. Audio akan diproses otomatis")
-    st.write("3. Lihat hasil deteksi aksen")
-    
-    st.subheader("Persyaratan audio:")
-    st.write("- Format: WAV")
-    st.write("- Durasi: 1-5 detik")
-    st.write("- Sample rate: 22050 Hz")
-
-# Function to create a simple CNN model
-def create_cnn_model(input_shape=(128, 128, 1), num_classes=5):
-    """Membuat model CNN sederhana untuk klasifikasi"""
-    model = tf.keras.Sequential([
-        # First Conv Block
-        tf.keras.layers.Conv2D(32, (3, 3), activation='relu', 
-                              input_shape=input_shape, padding='same'),
-        tf.keras.layers.BatchNormalization(),
-        tf.keras.layers.MaxPooling2D((2, 2)),
-        tf.keras.layers.Dropout(0.25),
+    def compute_prototypes(self, support_set, support_labels):
+        """Menghitung prototype untuk setiap kelas"""
+        # Encode support set
+        support_embeddings = self.encoder(support_set)
         
-        # Second Conv Block
-        tf.keras.layers.Conv2D(64, (3, 3), activation='relu', padding='same'),
-        tf.keras.layers.BatchNormalization(),
-        tf.keras.layers.MaxPooling2D((2, 2)),
-        tf.keras.layers.Dropout(0.25),
+        # Kelompokkan berdasarkan label dan hitung mean
+        prototypes = []
+        unique_labels = tf.unique(support_labels)[0]
         
-        # Third Conv Block
-        tf.keras.layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
-        tf.keras.layers.BatchNormalization(),
-        tf.keras.layers.MaxPooling2D((2, 2)),
-        tf.keras.layers.Dropout(0.25),
+        for label in unique_labels:
+            mask = tf.equal(support_labels, label)
+            class_embeddings = tf.boolean_mask(support_embeddings, mask)
+            prototype = tf.reduce_mean(class_embeddings, axis=0)
+            prototypes.append(prototype)
         
-        # Dense layers
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(256, activation='relu'),
-        tf.keras.layers.BatchNormalization(),
-        tf.keras.layers.Dropout(0.5),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Dense(num_classes, activation='softmax')
-    ])
+        return tf.stack(prototypes), unique_labels
     
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-        loss='categorical_crossentropy',
-        metrics=['accuracy']
-    )
+    def euclidean_distance(self, query_embeddings, prototypes):
+        """Menghitung Euclidean distance"""
+        # query_embeddings: [n_queries, embedding_dim]
+        # prototypes: [n_classes, embedding_dim]
+        
+        # Expand dimensions untuk broadcasting
+        query_exp = tf.expand_dims(query_embeddings, 1)  # [n_queries, 1, embedding_dim]
+        proto_exp = tf.expand_dims(prototypes, 0)        # [1, n_classes, embedding_dim]
+        
+        # Hitung Euclidean distance
+        distances = tf.reduce_sum(tf.square(query_exp - proto_exp), axis=2)
+        return distances
     
-    return model
+    def predict_on_batch(self, support_set, support_labels, query_set):
+        """Prediksi untuk prototypical network"""
+        # Hitung prototypes
+        prototypes, class_labels = self.compute_prototypes(support_set, support_labels)
+        
+        # Encode query set
+        query_embeddings = self.encoder(query_set)
+        
+        # Hitung distances
+        distances = self.euclidean_distance(query_embeddings, prototypes)
+        
+        # Convert distances ke probabilities (softmax over negative distances)
+        probabilities = tf.nn.softmax(-distances)
+        
+        return probabilities, class_labels, distances
+    
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "encoder": tf.keras.layers.serialize(self.encoder)
+        })
+        return config
+    
+    @classmethod
+    def from_config(cls, config):
+        encoder = tf.keras.layers.deserialize(config.pop("encoder"))
+        return cls(encoder, **config)
 
-# Initialize or load model
+
+# ==========================================================
+# 2. FUNGSI LOAD DATA & MODEL
+# ==========================================================
 @st.cache_resource
-def load_model():
-    """Membuat atau memuat model"""
-    try:
-        # Coba muat model yang sudah ada
-        model = tf.keras.models.load_model('accent_model.h5')
-        st.success("✅ Model berhasil dimuat dari file")
-    except Exception as e:
-        # Buat model baru jika file tidak ada
-        st.info("🔄 Membuat model baru...")
-        model = create_cnn_model()
-        
-        # Generate dummy weights untuk demo
-        dummy_input = np.random.randn(1, 128, 128, 1).astype(np.float32)
-        model.predict(dummy_input, verbose=0)  # Inisialisasi weights
-        
-        # Simpan model untuk penggunaan berikutnya
-        try:
-            model.save('accent_model.h5')
-            st.success("✅ Model baru berhasil dibuat")
-        except Exception as save_error:
-            st.warning(f"⚠️ Model dibuat tapi tidak disimpan: {save_error}")
+def load_accent_model():
+    model_name = "model_embedding_aksen.keras"
+    current_dir = os.getcwd()
+    model_path = os.path.join(current_dir, model_name)
     
-    return model
-
-# Function to extract MFCC features (FIXED VERSION)
-def extract_features(audio_path, n_mfcc=13, max_pad_len=128):
-    """Ekstrak fitur MFCC dari audio"""
-    try:
-        # Load audio file using soundfile (more reliable)
-        audio, sample_rate = sf.read(audio_path)
-        
-        # Convert to mono if stereo
-        if len(audio.shape) > 1:
-            audio = np.mean(audio, axis=1)
-        
-        # Resample if necessary
-        if sample_rate != 22050:
-            # Use librosa for resampling if available
-            try:
-                audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=22050)
-                sample_rate = 22050
-            except:
-                # Simple resampling fallback
-                ratio = 22050 / sample_rate
-                new_length = int(len(audio) * ratio)
-                audio = np.interp(
-                    np.linspace(0, len(audio), new_length),
-                    np.arange(len(audio)),
-                    audio
-                )
-                sample_rate = 22050
-        
-        # Normalize audio
-        if np.max(np.abs(audio)) > 0:
-            audio = audio / np.max(np.abs(audio))
-        
-        # Extract MFCC features
-        mfccs = librosa.feature.mfcc(
-            y=audio, 
-            sr=sample_rate, 
-            n_mfcc=n_mfcc,
-            n_fft=2048,
-            hop_length=512
-        )
-        
-        # Pad or truncate to max_pad_len
-        if mfccs.shape[1] > max_pad_len:
-            mfccs = mfccs[:, :max_pad_len]
-        else:
-            pad_width = max_pad_len - mfccs.shape[1]
-            mfccs = np.pad(mfccs, pad_width=((0, 0), (0, pad_width)), mode='constant')
-        
-        # Add channel dimension for CNN
-        mfccs = np.expand_dims(mfccs, axis=-1)
-        
-        return mfccs
-    except Exception as e:
-        st.error(f"Error extracting features: {str(e)}")
+    if os.path.exists(model_path):
+        try:
+            custom_objects = {"PrototypicalNetwork": PrototypicalNetwork}
+            model = tf.keras.models.load_model(
+                model_path, 
+                custom_objects=custom_objects, 
+                compile=False
+            )
+            return model
+        except Exception as e:
+            st.error(f"Error loading model: {e}")
+            return None
+    else:
+        st.error(f"Model file not found at: {model_path}")
         return None
 
-# Function to preprocess audio (FIXED VERSION)
-def preprocess_audio(uploaded_file):
-    """Preprocessing file audio yang diupload"""
-    try:
-        # Save uploaded file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-            tmp_file.write(uploaded_file.read())
-            temp_path = tmp_file.name
-        
-        # Read audio using soundfile (avoid librosa for initial reading)
-        try:
-            audio, sr = sf.read(temp_path)
-            
-            # Convert to mono if stereo
-            if len(audio.shape) > 1:
-                audio = np.mean(audio, axis=1)
-            
-            duration = len(audio) / sr
-            
-            if duration < 1 or duration > 10:
-                st.warning(f"⚠️ Durasi audio: {duration:.2f} detik. Sebaiknya antara 1-5 detik.")
-            
-            # Save as mono WAV with correct sample rate
-            processed_path = temp_path.replace('.wav', '_processed.wav')
-            sf.write(processed_path, audio, sr, subtype='PCM_16')
-            
-        except Exception as read_error:
-            st.error(f"Error membaca file audio: {read_error}")
-            # Clean up and return None
-            os.unlink(temp_path)
-            return None, None, None
-        
-        # Clean up original temp file
-        os.unlink(temp_path)
-        
-        return processed_path, duration, sr
-        
-    except Exception as e:
-        st.error(f"Error preprocessing audio: {str(e)}")
-        # Clean up any remaining temp files
-        try:
-            if 'temp_path' in locals() and os.path.exists(temp_path):
-                os.unlink(temp_path)
-            if 'processed_path' in locals() and os.path.exists(processed_path):
-                os.unlink(processed_path)
-        except:
-            pass
-        return None, None, None
 
-# Main app
-def main():
-    # Load model
+@st.cache_data
+def load_metadata_df():
+    csv_path = "metadata.csv"
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
+        return df
+    return None
+
+
+@st.cache_data
+def load_support_set():
+    """Load contoh audio untuk setiap aksen (support set)"""
+    # Anda perlu menyiapkan beberapa contoh audio untuk setiap aksen
+    # atau menggunakan data dari metadata
+    support_data = []
+    support_labels = []
+    
+    # Contoh path - sesuaikan dengan struktur data Anda
+    aksen_folders = {
+        "Sunda": "data/train/sunda",
+        "Jawa Tengah": "data/train/jawa_tengah", 
+        "Jawa Timur": "data/train/jawa_timur",
+        "Yogyakarta": "data/train/yogyakarta",
+        "Betawi": "data/train/betawi"
+    }
+    
+    for label, folder in aksen_folders.items():
+        if os.path.exists(folder):
+            # Ambil 5 file pertama sebagai support set
+            files = [f for f in os.listdir(folder) if f.endswith('.wav')][:5]
+            for file in files:
+                file_path = os.path.join(folder, file)
+                try:
+                    features = extract_features(file_path)
+                    if features is not None:
+                        support_data.append(features)
+                        support_labels.append(label)
+                except:
+                    continue
+    
+    if len(support_data) > 0:
+        support_data = np.array(support_data)
+        # Encode labels ke angka
+        from sklearn.preprocessing import LabelEncoder
+        le = LabelEncoder()
+        support_labels_encoded = le.fit_transform(support_labels)
+        return support_data, support_labels_encoded, le
+    return None, None, None
+
+
+# ==========================================================
+# 3. FUNGSI EXTRACT FEATURES (SESUAI TRAINING)
+# ==========================================================
+def extract_features(audio_path, sr=16000, n_mfcc=40, max_frames=100):
+    """Ekstrak fitur MFCC sama seperti saat training"""
     try:
-        model = load_model()
-    except Exception as model_error:
-        st.error(f"Gagal memuat model: {model_error}")
-        st.info("Membuat model sederhana alternatif...")
-        # Create a very simple fallback model
-        model = tf.keras.Sequential([
-            tf.keras.layers.Flatten(input_shape=(128, 128, 1)),
-            tf.keras.layers.Dense(64, activation='relu'),
-            tf.keras.layers.Dense(5, activation='softmax')
-        ])
-        model.compile(optimizer='adam', loss='categorical_crossentropy')
+        # Load audio
+        y, sr = librosa.load(audio_path, sr=sr)
+        
+        # Normalize
+        y = y / np.max(np.abs(y))
+        
+        # Ekstrak MFCC
+        mfcc = librosa.feature.mfcc(
+            y=y, 
+            sr=sr, 
+            n_mfcc=n_mfcc,
+            n_fft=2048,
+            hop_length=512,
+            fmin=0,
+            fmax=sr/2
+        )
+        
+        # Delta dan Delta-Delta
+        mfcc_delta = librosa.feature.delta(mfcc)
+        mfcc_delta2 = librosa.feature.delta(mfcc, order=2)
+        
+        # Gabungkan
+        mfcc_features = np.vstack([mfcc, mfcc_delta, mfcc_delta2])
+        
+        # Padding atau truncation
+        if mfcc_features.shape[1] > max_frames:
+            mfcc_features = mfcc_features[:, :max_frames]
+        else:
+            pad_width = max_frames - mfcc_features.shape[1]
+            mfcc_features = np.pad(
+                mfcc_features, 
+                pad_width=((0, 0), (0, pad_width)), 
+                mode='constant'
+            )
+        
+        # Normalize per fitur
+        mfcc_features = (mfcc_features - np.mean(mfcc_features)) / np.std(mfcc_features)
+        
+        # Reshape untuk model [frames, features, channels]
+        mfcc_features = np.transpose(mfcc_features)  # [max_frames, n_features]
+        mfcc_features = np.expand_dims(mfcc_features, axis=-1)  # [max_frames, n_features, 1]
+        
+        return mfcc_features
     
-    # Define accent labels
-    accent_labels = ['Betawi', 'Jawa Timur', 'Jawa Tengah', 'Sunda', 'Yogyakarta']
-    
-    # File upload section
-    st.header("📁 Unggah File Audio")
-    
-    uploaded_file = st.file_uploader(
-        "Pilih file audio (.wav)",
-        type=['wav'],
-        help="Unggah file audio dalam format WAV dengan sample rate 22050 Hz"
+    except Exception as e:
+        st.error(f"Error extracting features: {e}")
+        return None
+
+
+# ==========================================================
+# 4. FUNGSI PREDIKSI PROTOTYPICAL NETWORK
+# ==========================================================
+def predict_accent_prototypical(audio_path, model, support_data, support_labels, label_encoder):
+    """Prediksi menggunakan Prototypical Network"""
+    try:
+        # Extract features dari query audio
+        query_features = extract_features(audio_path)
+        if query_features is None:
+            return "Error: Gagal ekstrak fitur", None, None
+        
+        # Reshape untuk batch
+        query_batch = np.expand_dims(query_features, axis=0)  # [1, frames, features, 1]
+        
+        # Jika model adalah PrototypicalNetwork
+        if isinstance(model, PrototypicalNetwork):
+            # Gunakan method khusus untuk prototypical
+            probabilities, class_indices, distances = model.predict_on_batch(
+                support_set=support_data,
+                support_labels=support_labels,
+                query_set=query_batch
+            )
+            
+            # Decode label
+            predicted_idx = np.argmax(probabilities[0])
+            predicted_label = label_encoder.inverse_transform([class_indices[predicted_idx]])[0]
+            confidence = float(probabilities[0][predicted_idx] * 100)
+            
+            # Get all probabilities
+            all_probs = {}
+            for idx, class_idx in enumerate(class_indices):
+                label = label_encoder.inverse_transform([class_idx])[0]
+                all_probs[label] = float(probabilities[0][idx] * 100)
+            
+            return predicted_label, confidence, all_probs
+            
+        else:
+            # Jika model biasa (bukan PrototypicalNetwork)
+            prediction = model.predict(query_batch, verbose=0)
+            aksen_classes = ["Sunda", "Jawa Tengah", "Jawa Timur", "Yogyakarta", "Betawi"]
+            predicted_idx = np.argmax(prediction[0])
+            predicted_label = aksen_classes[predicted_idx]
+            confidence = float(prediction[0][predicted_idx] * 100)
+            
+            # Get all probabilities
+            all_probs = {}
+            for i, label in enumerate(aksen_classes):
+                all_probs[label] = float(prediction[0][i] * 100)
+            
+            return predicted_label, confidence, all_probs
+            
+    except Exception as e:
+        return f"Error: {str(e)}", None, None
+
+
+# ==========================================================
+# 5. MAIN UI
+# ==========================================================
+def main():
+    # Set page config
+    st.set_page_config(
+        page_title="Deteksi Aksen Prototypical Network", 
+        page_icon="🎙️", 
+        layout="wide"
     )
     
-    if uploaded_file is not None:
-        # Display audio info
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.audio(uploaded_file, format='audio/wav')
-        
-        with col2:
-            # Preprocess audio
-            with st.spinner("🔄 Memproses audio..."):
-                audio_path, duration, original_sr = preprocess_audio(uploaded_file)
-            
-            if audio_path:
-                st.info(f"📊 Informasi Audio:")
-                st.write(f"- Durasi: {duration:.2f} detik")
-                st.write(f"- Sample rate: {original_sr} Hz")
-                st.write(f"- Format: WAV")
-            else:
-                st.error("Gagal memproses file audio")
-                return
-        
-        # Process and predict button
-        if st.button("🔍 Deteksi Aksen", type="primary", use_container_width=True):
-            with st.spinner("🔄 Mengekstrak fitur dan menganalisis..."):
-                # Extract features
-                features = extract_features(audio_path)
-                
-                if features is not None:
-                    try:
-                        # Make prediction
-                        prediction = model.predict(np.expand_dims(features, axis=0), verbose=0)
-                        
-                        # Get predicted class and confidence
-                        predicted_class_idx = np.argmax(prediction[0])
-                        confidence = prediction[0][predicted_class_idx] * 100
-                        predicted_accent = accent_labels[predicted_class_idx]
-                        
-                        # Display results
-                        st.success("✅ Analisis selesai!")
-                        
-                        # Results in columns
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric("Aksen Terdeteksi", predicted_accent)
-                        
-                        with col2:
-                            st.metric("Tingkat Kepercayaan", f"{confidence:.1f}%")
-                        
-                        with col3:
-                            # Show emoji based on confidence
-                            if confidence > 80:
-                                emoji = "🎯"
-                            elif confidence > 60:
-                                emoji = "👍"
-                            else:
-                                emoji = "🤔"
-                            st.metric("Kualitas Deteksi", emoji)
-                        
-                        # Show detailed probabilities
-                        st.subheader("📈 Probabilitas per Aksen:")
-                        
-                        # Create progress bars for each accent
-                        for i, (accent, prob) in enumerate(zip(accent_labels, prediction[0] * 100)):
-                            col1, col2, col3 = st.columns([2, 5, 1])
-                            with col1:
-                                st.write(f"{accent}")
-                            with col2:
-                                st.progress(min(100, int(prob)) / 100)
-                            with col3:
-                                st.write(f"{prob:.1f}%")
-                        
-                    
-                    except Exception as pred_error:
-                        st.error(f"Gagal melakukan prediksi: {pred_error}")
-                        # Show dummy results for demo
-                        st.info("Mode demo: Menampilkan contoh hasil...")
-                        
-                        # Dummy results
-                        dummy_pred = np.random.dirichlet(np.ones(5), size=1)[0]
-                        pred_idx = np.argmax(dummy_pred)
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric("Aksen Terdeteksi (Demo)", accent_labels[pred_idx])
-                        with col2:
-                            st.metric("Tingkat Kepercayaan", f"{dummy_pred[pred_idx]*100:.1f}%")
-                
-                else:
-                    st.error("❌ Gagal mengekstrak fitur dari audio. Pastikan file audio valid.")
-            
-            # Clean up temporary files
-            try:
-                if audio_path and os.path.exists(audio_path):
-                    os.unlink(audio_path)
-            except:
-                pass
+    # Title
+    st.title("🎙️ Sistem Deteksi Aksen Prototypical Network")
+    st.markdown("""
+    Aplikasi berbasis **Few-Shot Learning** untuk klasifikasi aksen daerah Indonesia.
+    Menggunakan **Prototypical Networks** yang efektif untuk data terbatas.
+    """)
+    st.divider()
     
+    # Load model dan data
+    with st.spinner("Memuat model dan data..."):
+        model_aksen = load_accent_model()
+        df_metadata = load_metadata_df()
+        
+        # Load support set untuk prototypical network
+        support_data, support_labels, label_encoder = load_support_set()
+    
+    # Sidebar
+    with st.sidebar:
+        st.header("⚙️ Status Sistem")
+        
+        # Model status
+        if model_aksen:
+            st.success("✅ Model: Terhubung")
+            # Tampilkan info model
+            model_type = "PrototypicalNetwork" if isinstance(model_aksen, PrototypicalNetwork) else "Standard Model"
+            st.info(f"**Tipe Model:** {model_type}")
+        else:
+            st.error("❌ Model: Tidak ditemukan")
+        
+        # Metadata status
+        if df_metadata is not None:
+            st.success(f"✅ Metadata: {len(df_metadata)} sampel")
+        else:
+            st.warning("⚠️ Metadata: Tidak ditemukan")
+        
+        # Support set status
+        if support_data is not None:
+            st.success(f"✅ Support Set: {len(support_data)} sampel ({len(np.unique(support_labels))} kelas)")
+        else:
+            st.warning("⚠️ Support Set: Tidak ditemukan (gunakan model standar)")
+        
+        st.divider()
+        st.caption("🎓 Skripsi Project - 2026")
+    
+    # Main content
+    col1, col2 = st.columns([1, 1.5])
+    
+    with col1:
+        st.subheader("📥 Input Audio")
+        
+        # File uploader
+        audio_file = st.file_uploader(
+            "Upload file audio (.wav, .mp3, .flac)", 
+            type=["wav", "mp3", "flac"],
+            help="Durasi optimal: 3-10 detik, sample rate: 16000 Hz"
+        )
+        
+        if audio_file:
+            # Display audio
+            st.audio(audio_file)
+            
+            # File info
+            file_size = audio_file.size / 1024  # KB
+            st.caption(f"**Info File:** {audio_file.name} ({file_size:.1f} KB)")
+            
+            # Detect button
+            if st.button(
+                "🔍 Deteksi Aksen", 
+                type="primary", 
+                use_container_width=True,
+                disabled=(model_aksen is None)
+            ):
+                with st.spinner("🔄 Menganalisis audio..."):
+                    # Save temp file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                        tmp.write(audio_file.getbuffer())
+                        tmp_path = tmp.name
+                    
+                    try:
+                        # Predict
+                        if isinstance(model_aksen, PrototypicalNetwork) and support_data is not None:
+                            predicted_label, confidence, all_probs = predict_accent_prototypical(
+                                tmp_path, model_aksen, support_data, support_labels, label_encoder
+                            )
+                        else:
+                            # Fallback to standard prediction
+                            predicted_label, confidence, all_probs = predict_accent_prototypical(
+                                tmp_path, model_aksen, None, None, None
+                            )
+                        
+                        # Display results in col2
+                        with col2:
+                            st.subheader("📊 Hasil Analisis")
+                            
+                            # Result card
+                            with st.container(border=True):
+                                st.markdown(f"### 🎭 Aksen Terdeteksi")
+                                st.markdown(f"# **{predicted_label}**")
+                                st.metric("Tingkat Kepercayaan", f"{confidence:.1f}%")
+                            
+                            # Probabilities
+                            st.subheader("📈 Distribusi Probabilitas")
+                            for label, prob in sorted(all_probs.items(), key=lambda x: x[1], reverse=True):
+                                # Progress bar dengan warna berbeda
+                                if label == predicted_label:
+                                    st.progress(prob/100, text=f"**{label}**: {prob:.1f}%")
+                                else:
+                                    # Progress bar dengan transparency
+                                    st.progress(prob/100, text=f"{label}: {prob:.1f}%")
+                            
+                            # Metadata info
+                            if df_metadata is not None and audio_file.name in df_metadata['file_name'].values:
+                                st.divider()
+                                st.subheader("📋 Informasi Pembicara")
+                                
+                                user_data = df_metadata[df_metadata['file_name'] == audio_file.name].iloc[0]
+                                
+                                info_cols = st.columns(3)
+                                with info_cols[0]:
+                                    st.metric("Usia", f"{user_data.get('usia', '-')}")
+                                with info_cols[1]:
+                                    st.metric("Gender", user_data.get('gender', '-'))
+                                with info_cols[2]:
+                                    st.metric("Provinsi", user_data.get('provinsi', '-'))
+                                
+                                # Additional info jika ada
+                                if 'kota' in user_data:
+                                    st.info(f"**Kota Asal:** {user_data['kota']}")
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
+                    finally:
+                        # Cleanup temp file
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
+    
+    with col2:
+        if not audio_file:
+            # Placeholder/instructions
+            st.subheader("ℹ️ Cara Penggunaan")
+            st.info("""
+            1. **Upload file audio** di kolom kiri
+            2. **Tekan tombol 'Deteksi Aksen'**
+            3. **Lihat hasil** di panel ini
+            
+            **Persyaratan Audio:**
+            - Format: WAV, MP3, atau FLAC
+            - Durasi: 3-10 detik optimal
+            - Sample rate: 16000 Hz direkomendasikan
+            - Mono/stereo: Keduanya didukung
+            
+            **Aksen yang Didukung:**
+            - Sunda (Jawa Barat)
+            - Jawa Tengah
+            - Jawa Timur  
+            - Yogyakarta
+            - Betawi (Jakarta)
+            """)
+            
+            # Feature visualization placeholder
+            st.divider()
+            st.subheader("🎯 Teknologi Prototypical Network")
+            st.markdown("""
+            **Prototypical Networks** adalah metode *few-shot learning* yang:
+            - Mampu belajar dari sedikit contoh
+            - Membuat *prototype* untuk setiap kelas
+            - Mengklasifikasi berdasarkan jarak ke prototype
+            
+            **Keunggulan:**
+            ✓ Efektif untuk data terbatas  
+            ✓ Generalisasi lebih baik  
+            ✓ Tidak perlu retrain untuk kelas baru
+            """)
 
-# Run the app
 if __name__ == "__main__":
     main()
